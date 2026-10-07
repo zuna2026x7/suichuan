@@ -45,14 +45,16 @@
             android:exported="false"
             android:label="输入取件码" />
 
-        <!-- Portrait-locked QR scanner (journeyapps). The library's own
-             CaptureActivity is declared by the library itself; this is our
-             subclass, pinned to portrait in the manifest so scanning does
-             not flip to landscape. -->
+        <!-- QR scanner (journeyapps). The library's own CaptureActivity is
+             declared by the library itself with sensorLandscape, which kept
+             flipping the scanner to landscape; this subclass declaration
+             uses "sensor" so the scanner follows however the user is
+             holding the phone — portrait in portrait, landscape in
+             landscape. -->
         <activity
-            android:name=".PortraitCaptureActivity"
+            android:name=".SuichuanCaptureActivity"
             android:exported="false"
-            android:screenOrientation="portrait"
+            android:screenOrientation="sensor"
             android:stateNotNeeded="true"
             android:theme="@style/zxing_CaptureTheme"
             android:windowSoftInputMode="stateAlwaysHidden" />

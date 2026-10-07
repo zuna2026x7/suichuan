@@ -86,7 +86,8 @@ class ReceiveActivity : AppCompatActivity() {
                 .setPrompt("把取件二维码放进框里")
                 .setBeepEnabled(false)
                 .setBarcodeImageEnabled(false)
-                .setCaptureActivity(PortraitCaptureActivity::class.java)
+                .setOrientationLocked(false)
+                .setCaptureActivity(SuichuanCaptureActivity::class.java)
             scanLauncher.launch(options)
         }
         findViewById<Button>(R.id.button_paste).setOnClickListener {
