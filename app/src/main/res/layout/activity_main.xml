@@ -38,5 +38,14 @@
         <TextView
             style="@style/Suichuan.HintText"
             android:text="QQ、微信收到的安装包经常打不开（名字被改了），用第三个入口选它就能直接安装，不用去文件管理器改名。" />
+
+        <Button
+            android:id="@+id/button_upload_log"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="24dp"
+            android:text="上传日志帮我看看" />
     </LinearLayout>
 </ScrollView>

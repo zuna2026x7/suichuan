@@ -1,6 +1,7 @@
 package cloud.suichuan.app.net
 
 import cloud.suichuan.app.model.TransferPayload
+import cloud.suichuan.app.util.AppLog
 import cloud.suichuan.app.util.PayloadCodec
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -39,18 +40,24 @@ object BackendClient {
             .url("$trimmedBase/t")
             .post(PayloadCodec.writeMap(bodyMap).toRequestBody(JSON))
             .build()
-        HttpClients.instance.newCall(request).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw IOException("取件服务出错（${response.code}），暂时没法发送。")
+        return try {
+            HttpClients.instance.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    throw IOException("取件服务出错（${response.code}），暂时没法发送。")
+                }
+                val map = PayloadCodec.parseMap(text)
+                    ?: throw IOException("取件服务返回的内容看不懂，暂时没法发送。")
+                val code = map["code"]?.takeIf { it.isNotBlank() }
+                    ?: throw IOException("取件服务没有返回取件码。")
+                val uploadToken = map["uploadToken"]?.takeIf { it.isNotBlank() }
+                    ?: throw IOException("取件服务没有返回上传凭证。")
+                AppLog.log("API", "POST /t -> ${response.code}，取件码=$code")
+                CreatedTransfer(code, uploadToken)
             }
-            val map = PayloadCodec.parseMap(text)
-                ?: throw IOException("取件服务返回的内容看不懂，暂时没法发送。")
-            val code = map["code"]?.takeIf { it.isNotBlank() }
-                ?: throw IOException("取件服务没有返回取件码。")
-            val uploadToken = map["uploadToken"]?.takeIf { it.isNotBlank() }
-                ?: throw IOException("取件服务没有返回上传凭证。")
-            return CreatedTransfer(code, uploadToken)
+        } catch (e: Exception) {
+            AppLog.log("API", "POST /t 失败", e)
+            throw e
         }
     }
 
@@ -68,12 +75,19 @@ object BackendClient {
             .url("$trimmedBase/f/$uploadToken")
             .put(counting)
             .build()
-        HttpClients.instance.newCall(request).execute().use { response ->
-            // Drain the body so the connection can be reused.
-            response.body?.string()
-            if (!response.isSuccessful) {
-                throw IOException("文件没有传上去（${response.code}）。可以重试，或者改用临时托管发送。")
+        try {
+            HttpClients.instance.newCall(request).execute().use { response ->
+                // Drain the body so the connection can be reused.
+                response.body?.string()
+                if (!response.isSuccessful) {
+                    throw IOException("文件没有传上去（${response.code}）。可以重试，或者改用临时托管发送。")
+                }
+                // The token itself never goes into the log — only its shape.
+                AppLog.log("API", "PUT /f/:token -> ${response.code}，bytes=${file.length()}")
             }
+        } catch (e: Exception) {
+            AppLog.log("API", "PUT /f/:token 失败", e)
+            throw e
         }
     }
 
@@ -81,23 +95,32 @@ object BackendClient {
     fun fetchTransfer(base: String, code: String): FetchedTransfer {
         val trimmedBase = base.trimEnd('/')
         val request = Request.Builder().url("$trimmedBase/t/$code").get().build()
-        HttpClients.instance.newCall(request).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (response.code == 404) {
-                throw IOException("这个取件码不存在，或者已经过期了。让对方重新发送一次。")
+        return try {
+            HttpClients.instance.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (response.code == 404) {
+                    throw IOException("这个取件码不存在，或者已经过期了。让对方重新发送一次。")
+                }
+                if (!response.isSuccessful) {
+                    throw IOException("取件服务出错（${response.code}），稍后再试一次。")
+                }
+                val map = PayloadCodec.parseMap(text)
+                    ?: throw IOException("取件码对应的内容看不懂，让对方重新发送一次。")
+                // The worker never stores a download URL; the file is addressed
+                // by code, so fill it in here for the downloader.
+                val completed = map + ("downloadUrl" to "$trimmedBase/f/$code")
+                val payload = TransferPayload.fromMap(completed)
+                    ?: throw IOException("取件码对应的内容看不懂，让对方重新发送一次。")
+                val ready = map["ready"]?.equals("true", ignoreCase = true) == true
+                AppLog.log(
+                    "API",
+                    "GET /t/$code -> ${response.code}，ready=$ready，应用=${payload.appName}，size=${payload.sizeBytes}"
+                )
+                FetchedTransfer(payload, ready)
             }
-            if (!response.isSuccessful) {
-                throw IOException("取件服务出错（${response.code}），稍后再试一次。")
-            }
-            val map = PayloadCodec.parseMap(text)
-                ?: throw IOException("取件码对应的内容看不懂，让对方重新发送一次。")
-            // The worker never stores a download URL; the file is addressed
-            // by code, so fill it in here for the downloader.
-            val completed = map + ("downloadUrl" to "$trimmedBase/f/$code")
-            val payload = TransferPayload.fromMap(completed)
-                ?: throw IOException("取件码对应的内容看不懂，让对方重新发送一次。")
-            val ready = map["ready"]?.equals("true", ignoreCase = true) == true
-            return FetchedTransfer(payload, ready)
+        } catch (e: Exception) {
+            AppLog.log("API", "GET /t/$code 失败", e)
+            throw e
         }
     }
 }

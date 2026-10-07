@@ -18,6 +18,8 @@ import cloud.suichuan.app.data.Packager
 import cloud.suichuan.app.model.TransferPayload
 import cloud.suichuan.app.net.BackendClient
 import cloud.suichuan.app.net.LitterboxUploader
+import cloud.suichuan.app.net.LogUploader
+import cloud.suichuan.app.util.AppLog
 import cloud.suichuan.app.util.FormatUtil
 import cloud.suichuan.app.util.PayloadCodec
 import cloud.suichuan.app.util.QrUtil
@@ -48,6 +50,7 @@ class ShareActivity : AppCompatActivity() {
     private lateinit var progressBar: ProgressBar
     private lateinit var retryButton: Button
     private lateinit var fallbackButton: Button
+    private lateinit var uploadLogButton: Button
     private lateinit var resultLayout: LinearLayout
     private lateinit var codeLabel: TextView
     private lateinit var codeText: TextView
@@ -61,12 +64,15 @@ class ShareActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.init(this)
         setContentView(R.layout.activity_share)
 
         statusText = findViewById(R.id.text_status)
         progressBar = findViewById(R.id.progress_upload)
         retryButton = findViewById(R.id.button_retry)
         fallbackButton = findViewById(R.id.button_fallback)
+        uploadLogButton = findViewById(R.id.button_upload_log)
+        uploadLogButton.setOnClickListener { LogUploader.uploadFrom(this) }
         resultLayout = findViewById(R.id.layout_result)
         codeLabel = findViewById(R.id.text_code_label)
         codeText = findViewById(R.id.text_code)
@@ -180,6 +186,7 @@ class ShareActivity : AppCompatActivity() {
         working = true
         retryButton.visibility = View.GONE
         fallbackButton.visibility = View.GONE
+        uploadLogButton.visibility = View.GONE
         resultLayout.visibility = View.GONE
         progressBar.visibility = View.VISIBLE
         progressBar.isIndeterminate = true
@@ -193,15 +200,21 @@ class ShareActivity : AppCompatActivity() {
             try {
                 packedFile = packed ?: Packager.pack(app, cacheDir).also { packed = it }
             } catch (e: Exception) {
+                AppLog.log("SEND", "打包失败 应用=${app.label} 包名=${app.packageName}", e)
                 showError(
                     "打包没有完成：${e.message ?: "未知问题"}。点重试再试一次。",
                     offerFallback = false
                 )
                 return@thread
             }
+            AppLog.log(
+                "SEND",
+                "打包完成 应用=${app.label} 包名=${app.packageName} size=${packedFile.sizeBytes} file=${packedFile.fileName}"
+            )
             // Fail fast, before either upload route starts: an oversize
             // package would only die partway through the upload.
             if (packedFile.sizeBytes > MAX_SEND_BYTES) {
+                AppLog.log("SEND", "超过发送上限：${packedFile.sizeBytes} > $MAX_SEND_BYTES")
                 showError(
                     "这个应用有 ${FormatUtil.size(packedFile.sizeBytes)}，超过了随传 2GB 的发送上限，暂时发不了。",
                     offerFallback = false
@@ -232,8 +245,10 @@ class ShareActivity : AppCompatActivity() {
                 packedFile,
                 downloadUrl = base.trimEnd('/') + "/f/" + created.code
             )
+            AppLog.log("SEND", "取件服务发送成功，取件码=${created.code}")
             showSuccess(payload, created.code)
         } catch (e: Exception) {
+            AppLog.log("SEND", "取件服务发送失败", e)
             showError(
                 "用取件服务发送失败了：${e.message ?: "网络出了点问题"}。" +
                     "可以点「重试」，或者改用临时托管发送（对方扫二维码或粘贴分享文字接收）。",
@@ -247,8 +262,10 @@ class ShareActivity : AppCompatActivity() {
         try {
             val url = LitterboxUploader.upload(packedFile.file, ::reportProgress)
             val payload = payloadFor(packedFile, downloadUrl = url)
+            AppLog.log("SEND", "临时托管发送成功，地址=${AppLog.redactUrl(url)}")
             showSuccess(payload, pickupCode = null)
         } catch (e: Exception) {
+            AppLog.log("SEND", "临时托管发送失败", e)
             showError(
                 "没有发出去：${e.message ?: "网络出了点问题"}。检查一下网络，点重试再试一次。",
                 offerFallback = false
@@ -294,6 +311,7 @@ class ShareActivity : AppCompatActivity() {
             statusText.text = message
             retryButton.visibility = View.VISIBLE
             fallbackButton.visibility = if (offerFallback) View.VISIBLE else View.GONE
+            uploadLogButton.visibility = View.VISIBLE
         }
     }
 }

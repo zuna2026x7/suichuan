@@ -20,6 +20,10 @@
 //   4. GET    /f/:code      download, with single-Range support (206/416)
 //   5. DELETE /t/:code      early removal; needs the deleteToken as an
 //                           x-delete-token header or ?token= query param
+//   6. POST   /log          client diagnostic log upload (only ever sent
+//                           when the user taps the in-app button); stored
+//                           verbatim under logs/, no auth — the log
+//                           contains no tokens by construction
 //
 // Expiry mirrors the worker's KV TTL: a record dies ttlSeconds after
 // creation; a successful upload re-arms it for its remaining TTL (floored
@@ -79,11 +83,16 @@ const SWEEP_MS = (() => {
 
 const RECORDS_DIR = path.join(DATA_DIR, "records");
 const FILES_DIR = path.join(DATA_DIR, "files");
+const LOGS_DIR = path.join(DATA_DIR, "logs");
+
+// Client diagnostic logs are capped well above the app's own ~256KB
+// file cap; anything bigger is not a log anymore.
+const LOG_MAX_BYTES = 1024 * 1024; // 1 MiB
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, x-delete-token",
+  "Access-Control-Allow-Headers": "Content-Type, x-delete-token, x-suichuan-info",
 };
 
 const SIZE_MISMATCH_ERROR = "上传的文件大小和登记的不一致，可能选错了文件。";
@@ -759,6 +768,39 @@ async function handleDownload(req, res, code) {
   await streamFile(res, payloadPath(code), 0, total - 1);
 }
 
+// POST /log — the client app's diagnostic log, sent only when the user
+// explicitly taps 「上传日志帮我看看」. Stored verbatim under logs/ as
+// "<ISO timestamp>-<6 hex>.log"; when the client sent an x-suichuan-info
+// header (app version; device model; Android release) it becomes the
+// file's first line, prefixed with "# ". No auth: the log contains no
+// tokens by construction (the client redacts before writing).
+async function handleLogUpload(req, res) {
+  let body;
+  try {
+    body = await readBody(req, LOG_MAX_BYTES);
+  } catch (e) {
+    return sendJson(res, 413, { error: "日志太大了，没法上传。" });
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const name = stamp + "-" + crypto.randomBytes(3).toString("hex") + ".log";
+  const info = req.headers["x-suichuan-info"];
+  let data = body;
+  if (typeof info === "string" && info.length > 0) {
+    const header = Buffer.from(
+      "# " + info.replace(/[\r\n]+/g, " ") + "\n",
+      "utf8"
+    );
+    data = Buffer.concat([header, body]);
+  }
+  try {
+    fs.mkdirSync(LOGS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(LOGS_DIR, name), data);
+  } catch (e) {
+    return sendJson(res, 502, { error: "日志保存失败，请稍后再试。" });
+  }
+  return sendJson(res, 200, { ok: true });
+}
+
 function handleDelete(req, res, url, code) {
   const token =
     url.searchParams.get("token") || req.headers["x-delete-token"] || "";
@@ -786,12 +828,13 @@ async function handle(req, res) {
   const parts = url.pathname.split("/").filter((p) => p.length > 0);
 
   // Request logging for the transfer routes (see logRequestOnFinish).
-  // Installed before dispatch so every /t and /f response is accounted
-  // for; the path is rebuilt from the segments, never taken from the
-  // raw URL, so no token can leak into the log.
-  if (parts[0] === "t" || parts[0] === "f") {
+  // Installed before dispatch so every /t, /f and /log response is
+  // accounted for; the path is rebuilt from the segments, never taken
+  // from the raw URL, so no token can leak into the log. (The /log body
+  // itself is of course never logged — only method/path/status/bytes.)
+  if (parts[0] === "t" || parts[0] === "f" || parts[0] === "log") {
     let logPath = "/" + parts[0];
-    if (parts.length >= 2) {
+    if (parts.length >= 2 && parts[0] !== "log") {
       logPath +=
         "/" + (req.method === "PUT" && parts[0] === "f" ? ":token" : parts[1]);
     }
@@ -823,6 +866,11 @@ async function handle(req, res) {
   // either as ?token=... or as an "x-delete-token" header.
   if (req.method === "DELETE" && parts.length === 2 && parts[0] === "t") {
     return handleDelete(req, res, url, parts[1]);
+  }
+
+  // POST /log — client diagnostic log upload (user-initiated only).
+  if (req.method === "POST" && parts.length === 1 && parts[0] === "log") {
+    return handleLogUpload(req, res);
   }
 
   if (url.pathname === "/" || url.pathname === "/health") {

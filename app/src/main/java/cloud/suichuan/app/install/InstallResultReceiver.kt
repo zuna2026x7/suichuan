@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.widget.Toast
+import cloud.suichuan.app.util.AppLog
 import cloud.suichuan.app.util.InstallErrorMapper
 
 /**
@@ -14,7 +15,14 @@ import cloud.suichuan.app.util.InstallErrorMapper
 class InstallResultReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        AppLog.init(context)
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+        AppLog.log(
+            "INSTALL",
+            "系统安装结果 status=$status" +
+                (intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+                    ?.let { " 原始信息=$it" } ?: "")
+        )
         when (status) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 val confirmIntent = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {

@@ -12,7 +12,9 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import cloud.suichuan.app.install.InstallPermissionHelper
 import cloud.suichuan.app.install.Installer
+import cloud.suichuan.app.net.LogUploader
 import cloud.suichuan.app.util.ApkInspector
+import cloud.suichuan.app.util.AppLog
 import java.io.File
 import kotlin.concurrent.thread
 
@@ -30,16 +32,20 @@ class RescueActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
     private lateinit var installButton: Button
+    private lateinit var uploadLogButton: Button
 
     private var readyFile: File? = null
     private var readyKind: ApkInspector.Kind = ApkInspector.Kind.INVALID
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.init(this)
         setContentView(R.layout.activity_rescue)
 
         statusText = findViewById(R.id.text_status)
         installButton = findViewById(R.id.button_install)
+        uploadLogButton = findViewById(R.id.button_upload_log)
+        uploadLogButton.setOnClickListener { LogUploader.uploadFrom(this) }
 
         findViewById<Button>(R.id.button_pick).setOnClickListener {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -64,6 +70,7 @@ class RescueActivity : AppCompatActivity() {
                 Installer.install(this, file, readyKind)
                 Toast.makeText(this, "正在打开系统安装界面…", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
+                AppLog.log("RESCUE", "打开系统安装失败", e)
                 Toast.makeText(this, "安装没有打开：${e.message ?: "未知问题"}", Toast.LENGTH_LONG).show()
             }
         }
@@ -108,6 +115,9 @@ class RescueActivity : AppCompatActivity() {
     private fun processUri(uri: Uri) {
         statusText.text = "正在检查这个文件…"
         installButton.visibility = View.GONE
+        uploadLogButton.visibility = View.GONE
+        // Only the scheme is logged: a content URI carries ids, not ours to keep.
+        AppLog.log("RESCUE", "开始处理文件 scheme=${uri.scheme}")
         thread {
             try {
                 val dir = File(cacheDir, "rescue").apply { mkdirs() }
@@ -118,11 +128,13 @@ class RescueActivity : AppCompatActivity() {
                     target.outputStream().use { output -> stream.copyTo(output) }
                 }
                 val result = ApkInspector.inspect(target)
+                AppLog.log("RESCUE", "文件检查结果 kind=${result.kind} size=${target.length()}")
                 runOnUiThread {
                     when (result.kind) {
                         ApkInspector.Kind.INVALID -> {
                             target.delete()
                             statusText.text = "这个文件不是安装包，或者已经损坏了。如果它是 QQ/微信里收到的应用，让对方重新发一次。"
+                            uploadLogButton.visibility = View.VISIBLE
                         }
                         ApkInspector.Kind.SINGLE -> {
                             readyFile = target
@@ -139,8 +151,10 @@ class RescueActivity : AppCompatActivity() {
                     }
                 }
             } catch (e: Exception) {
+                AppLog.log("RESCUE", "处理文件失败", e)
                 runOnUiThread {
                     statusText.text = "没有处理成功：${e.message ?: "未知问题"}"
+                    uploadLogButton.visibility = View.VISIBLE
                 }
             }
         }

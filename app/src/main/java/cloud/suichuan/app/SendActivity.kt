@@ -17,6 +17,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import cloud.suichuan.app.data.AppScanner
 import cloud.suichuan.app.data.InstalledApp
+import cloud.suichuan.app.util.AppLog
 import cloud.suichuan.app.util.FormatUtil
 import kotlin.concurrent.thread
 
@@ -28,6 +29,7 @@ class SendActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.init(this)
         setContentView(R.layout.activity_send)
 
         val listView = findViewById<ListView>(R.id.list_apps)

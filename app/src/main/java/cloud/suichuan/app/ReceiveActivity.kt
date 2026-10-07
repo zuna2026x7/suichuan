@@ -20,7 +20,9 @@ import cloud.suichuan.app.install.Installer
 import cloud.suichuan.app.model.TransferPayload
 import cloud.suichuan.app.net.BackendClient
 import cloud.suichuan.app.net.Downloader
+import cloud.suichuan.app.net.LogUploader
 import cloud.suichuan.app.util.ApkInspector
+import cloud.suichuan.app.util.AppLog
 import cloud.suichuan.app.util.FormatUtil
 import cloud.suichuan.app.util.PayloadCodec
 import cloud.suichuan.app.util.Sha256
@@ -42,6 +44,7 @@ class ReceiveActivity : AppCompatActivity() {
     private lateinit var confirmLayout: LinearLayout
     private lateinit var confirmName: TextView
     private lateinit var confirmDetail: TextView
+    private lateinit var uploadLogButton: Button
 
     private var downloadedFile: File? = null
     private var downloadedKind: ApkInspector.Kind = ApkInspector.Kind.INVALID
@@ -68,6 +71,7 @@ class ReceiveActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.init(this)
         setContentView(R.layout.activity_receive)
 
         inputEdit = findViewById(R.id.edit_input)
@@ -76,6 +80,8 @@ class ReceiveActivity : AppCompatActivity() {
         confirmLayout = findViewById(R.id.layout_confirm)
         confirmName = findViewById(R.id.text_confirm_name)
         confirmDetail = findViewById(R.id.text_confirm_detail)
+        uploadLogButton = findViewById(R.id.button_upload_log)
+        uploadLogButton.setOnClickListener { LogUploader.uploadFrom(this) }
 
         findViewById<Button>(R.id.button_fetch).setOnClickListener {
             processInput(inputEdit.text.toString())
@@ -104,6 +110,7 @@ class ReceiveActivity : AppCompatActivity() {
                 Installer.install(this, file, downloadedKind)
                 Toast.makeText(this, "正在打开系统安装界面…", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
+                AppLog.log("RECV", "打开系统安装失败", e)
                 Toast.makeText(this, "安装没有打开：${e.message ?: "未知问题"}", Toast.LENGTH_LONG).show()
             }
         }
@@ -146,6 +153,7 @@ class ReceiveActivity : AppCompatActivity() {
         if (busy) return
         busy = true
         confirmLayout.visibility = View.GONE
+        uploadLogButton.visibility = View.GONE
         progressBar.visibility = View.VISIBLE
         progressBar.isIndeterminate = true
         statusText.text = "正在查找这个应用…"
@@ -153,6 +161,12 @@ class ReceiveActivity : AppCompatActivity() {
         thread {
             try {
                 val payload = resolvePayload(raw)
+                AppLog.log(
+                    "RECV",
+                    "已解析：应用=${payload.appName} 包名=${payload.packageName} " +
+                        "版本=${payload.versionName} size=${payload.sizeBytes} " +
+                        "有sha=${payload.sha256.isNotBlank()} 地址=${AppLog.redactUrl(payload.downloadUrl)}"
+                )
                 val dir = File(cacheDir, "receive").apply { mkdirs() }
                 val safeName = payload.fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
                     .ifBlank { "package.bin" }
@@ -175,8 +189,10 @@ class ReceiveActivity : AppCompatActivity() {
                         target.delete()
                         throw IllegalStateException("下载到的文件不完整（校验没通过）。网络可能不稳定，重新接收一次。")
                     }
+                    AppLog.log("RECV", "sha256 校验通过")
                 }
                 val inspection = ApkInspector.inspect(target)
+                AppLog.log("RECV", "文件检查结果 kind=${inspection.kind}")
                 if (inspection.kind == ApkInspector.Kind.INVALID) {
                     target.delete()
                     throw IllegalStateException("下载到的东西不是有效的安装包。让对方重新发送一次。")
@@ -195,10 +211,12 @@ class ReceiveActivity : AppCompatActivity() {
                     statusText.text = "下载完成，检查通过。"
                 }
             } catch (e: Exception) {
+                AppLog.log("RECV", "接收失败（用户看到：${e.message ?: "接收失败"}）", e)
                 runOnUiThread {
                     busy = false
                     progressBar.visibility = View.GONE
                     statusText.text = e.message ?: "接收失败，重新试一次。"
+                    uploadLogButton.visibility = View.VISIBLE
                 }
             }
         }
@@ -211,6 +229,10 @@ class ReceiveActivity : AppCompatActivity() {
             throw IllegalStateException("这个版本还没有配置取件码服务。请让对方把分享的整段文字发给你，粘贴到这里接收。")
         }
         val fetched = BackendClient.fetchTransfer(base, code)
+        AppLog.log(
+            "RECV",
+            "取件码 $code：ready=${fetched.ready} 应用=${fetched.payload.appName} size=${fetched.payload.sizeBytes}"
+        )
         if (!fetched.ready) {
             throw IllegalStateException("对方还没上传完，请稍后再试。等对方那边显示上传完成后，再回来点开始接收。")
         }

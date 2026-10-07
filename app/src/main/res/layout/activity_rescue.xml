@@ -30,6 +30,12 @@
             style="@style/Suichuan.HintText" />
 
         <Button
+            android:id="@+id/button_upload_log"
+            style="@style/Suichuan.BigButton"
+            android:text="上传日志帮我看看"
+            android:visibility="gone" />
+
+        <Button
             android:id="@+id/button_install"
             style="@style/Suichuan.BigButton"
             android:text="安装"

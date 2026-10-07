@@ -5,7 +5,8 @@
 // Spawns the real server on a random port with a temp data dir and drives
 // it over HTTP: full flow, a >10MB round trip, Range cases, oversize
 // rollback (with and without Content-Length), a declared-oversize
-// create rejected up front, delete-token checks,
+// create rejected up front, POST /log storage + its 413 cap,
+// delete-token checks,
 // persistence across a restart, expiry after a restart, and finally a
 // natural TTL expiry (ttlSeconds=1 clamps to the 60s minimum — the wait
 // at the end is real, mirroring the worker's KV TTL floor).
@@ -241,6 +242,71 @@ try {
       await stopServer(capServer.child);
       fs.rmSync(capDir, { recursive: true, force: true });
     }
+  }
+
+  // ----- POST /log stores the client diagnostic log -----
+  {
+    const logsDir = path.join(dataDir, "logs");
+    const logBody = "2026-10-07 10:00:00.000 [DL] probe -> 206 total=1234\n";
+    const res = await fetch(base + "/log", {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "x-suichuan-info": "0.1.0;Pixel 8;16",
+      },
+      body: logBody,
+    });
+    eq("POST /log status", res.status, 200);
+    eq("POST /log ok flag", (await res.json()).ok, true);
+    const files1 = fs.existsSync(logsDir) ? fs.readdirSync(logsDir) : [];
+    eq("POST /log stores one file", files1.length, 1);
+    check(
+      "log filename shape",
+      files1.length === 1 &&
+        /^\d{4}-\d{2}-\d{2}T.*-[0-9a-f]{6}\.log$/.test(files1[0]),
+      files1.join(",")
+    );
+    const stored =
+      files1.length === 1
+        ? fs.readFileSync(path.join(logsDir, files1[0]), "utf8")
+        : "";
+    check(
+      "log first line is # info header",
+      stored.startsWith("# 0.1.0;Pixel 8;16\n"),
+      JSON.stringify(stored.slice(0, 40))
+    );
+    check("log body stored verbatim", stored.endsWith(logBody), "");
+
+    // Without the info header the body is stored exactly as sent.
+    const plainBody = "line one\nline two\n";
+    const res2 = await fetch(base + "/log", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: plainBody,
+    });
+    eq("POST /log no header status", res2.status, 200);
+    const files2 = fs.readdirSync(logsDir);
+    eq("POST /log second file stored", files2.length, 2);
+    check(
+      "no-header log content equals body exactly",
+      files2
+        .map((f) => fs.readFileSync(path.join(logsDir, f), "utf8"))
+        .includes(plainBody),
+      ""
+    );
+
+    // Over the 1 MiB cap -> 413, and nothing new is stored.
+    const res3 = await fetch(base + "/log", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: Buffer.alloc(1024 * 1024 + 1, 0x61),
+    });
+    eq("POST /log oversize -> 413", res3.status, 413);
+    eq(
+      "POST /log oversize stored nothing",
+      fs.readdirSync(logsDir).length,
+      2
+    );
   }
 
   // ----- Full flow, small patterned payload (app sends strings) -----

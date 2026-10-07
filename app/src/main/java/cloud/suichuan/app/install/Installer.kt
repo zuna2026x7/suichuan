@@ -7,6 +7,7 @@ import android.content.pm.PackageInstaller
 import android.os.Build
 import cloud.suichuan.app.InstallResultReceiver
 import cloud.suichuan.app.util.ApkInspector
+import cloud.suichuan.app.util.AppLog
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.IOException
@@ -37,6 +38,8 @@ object Installer {
      * every package entry it contains, all in one session.
      */
     fun install(context: Context, file: File, kind: ApkInspector.Kind) {
+        AppLog.init(context)
+        AppLog.log("INSTALL", "开始安装 kind=$kind size=${file.length()}")
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         val sessionId = installer.createSession(params)
@@ -60,7 +63,9 @@ object Installer {
             }
             val pendingIntent = PendingIntent.getBroadcast(context, sessionId, intent, flags)
             session.commit(pendingIntent.intentSender)
+            AppLog.log("INSTALL", "安装会话 $sessionId 已提交，等系统结果")
         } catch (e: Exception) {
+            AppLog.log("INSTALL", "安装会话 $sessionId 失败", e)
             try {
                 session.abandon()
             } catch (ignored: Exception) {

@@ -1,5 +1,6 @@
 package cloud.suichuan.app.net
 
+import cloud.suichuan.app.util.AppLog
 import okhttp3.Call
 import okhttp3.Request
 import java.io.File
@@ -28,11 +29,25 @@ object Downloader {
         // A single connection to an overseas server is often throttled per
         // stream on the receiver's network, so big files are fetched as
         // parallel byte-range segments when the server supports ranges.
+        val startedAt = System.currentTimeMillis()
+        AppLog.log("DL", "开始下载 ${AppLog.redactUrl(url)}")
         val total = probeTotalSize(url)
-        return if (total != null && total > PARALLEL_THRESHOLD_BYTES) {
-            downloadParallel(url, target, total, onProgress)
-        } else {
-            downloadSingle(url, target, onProgress)
+        return try {
+            val result = if (total != null && total > PARALLEL_THRESHOLD_BYTES) {
+                AppLog.log("DL", "模式=分段并行，总大小=$total")
+                downloadParallel(url, target, total, onProgress)
+            } else {
+                AppLog.log("DL", "模式=单连接，总大小=${total ?: "未知"}")
+                downloadSingle(url, target, onProgress)
+            }
+            AppLog.log(
+                "DL",
+                "下载完成 bytes=${result.length()} 耗时=${System.currentTimeMillis() - startedAt}ms"
+            )
+            result
+        } catch (e: Exception) {
+            AppLog.log("DL", "下载失败 耗时=${System.currentTimeMillis() - startedAt}ms", e)
+            throw e
         }
     }
 
@@ -81,16 +96,20 @@ object Downloader {
         return try {
             HttpClients.instance.newCall(request).execute().use { response ->
                 if (response.code != 206) {
+                    AppLog.log("DL", "探测 -> HTTP ${response.code}（服务器不支持分段）")
                     null
                 } else {
-                    response.header("Content-Range")
+                    val total = response.header("Content-Range")
                         ?.substringAfterLast('/', "")
                         ?.trim()
                         ?.toLongOrNull()
                         ?.takeIf { it > 0 }
+                    AppLog.log("DL", "探测 -> 206，总大小=${total ?: "读不出"}")
+                    total
                 }
             }
         } catch (e: Exception) {
+            AppLog.log("DL", "探测失败：${e.javaClass.simpleName}: ${e.message}")
             null
         }
     }
@@ -122,9 +141,9 @@ object Downloader {
         val calls = CopyOnWriteArrayList<Call>()
         val pool = Executors.newFixedThreadPool(SEGMENT_COUNT)
         try {
-            val futures = ranges.map { range ->
+            val futures = ranges.mapIndexed { index, range ->
                 pool.submit(Callable {
-                    downloadSegment(url, target, range.first, range.second, calls) { read ->
+                    downloadSegment(index, url, target, range.first, range.second, calls) { read ->
                         val written = writtenTotal.addAndGet(read.toLong())
                         val last = lastReported.get()
                         if ((written - last >= 256 * 1024 || written == total) &&
@@ -179,6 +198,7 @@ object Downloader {
      * the whole download as before.
      */
     private fun downloadSegment(
+        index: Int,
         url: String,
         target: File,
         start: Long,
@@ -240,12 +260,21 @@ object Downloader {
                 // Includes mid-stream disconnects: whatever was written
                 // stays on disk and the next attempt resumes after it.
                 lastError = e
+                AppLog.log(
+                    "DL",
+                    "段 $index（范围 bytes=$start-$end）第 $attempt 次尝试失败：" +
+                        "${e.javaClass.simpleName}: ${e.message}（已下 $written/$expected）"
+                )
                 continue
             }
             // The stream ended without an error but short of the full
             // segment (connection closed early): resume the rest.
             if (written < expected) {
                 lastError = IOException("下载不完整，有一段数据没下完。网络可能不稳定，重新接收一次。")
+                AppLog.log(
+                    "DL",
+                    "段 $index 第 $attempt 次尝试提前结束：已下 $written/$expected"
+                )
             }
         }
         if (written != expected) {

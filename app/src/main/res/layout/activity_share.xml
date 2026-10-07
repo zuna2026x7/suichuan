@@ -41,6 +41,12 @@
             android:text="改用临时托管发送"
             android:visibility="gone" />
 
+        <Button
+            android:id="@+id/button_upload_log"
+            style="@style/Suichuan.BigButton"
+            android:text="上传日志帮我看看"
+            android:visibility="gone" />
+
         <LinearLayout
             android:id="@+id/layout_result"
             android:layout_width="match_parent"
