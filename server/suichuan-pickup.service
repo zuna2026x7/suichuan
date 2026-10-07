@@ -11,9 +11,9 @@ Restart=always
 RestartSec=3
 Environment=PORT=8080
 Environment=HOST=0.0.0.0
+Environment=SUICHUAN_MAX_BYTES=2147483648
 # Optional overrides (defaults shown in server/README.md):
 # Environment=SUICHUAN_DATA_DIR=/opt/suichuan/server/data
-# Environment=SUICHUAN_MAX_BYTES=104857600
 
 [Install]
 WantedBy=multi-user.target

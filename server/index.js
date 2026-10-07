@@ -88,6 +88,16 @@ const CORS_HEADERS = {
 
 const SIZE_MISMATCH_ERROR = "上传的文件大小和登记的不一致，可能选错了文件。";
 
+// Human-readable rendering of the size cap for error messages
+// (2147483648 -> "2GB", 104857600 -> "100MB").
+function formatLimit(bytes) {
+  const GIB = 1024 * 1024 * 1024;
+  const MIB = 1024 * 1024;
+  if (bytes % GIB === 0) return bytes / GIB + "GB";
+  if (bytes % MIB === 0) return bytes / MIB + "MB";
+  return bytes + " 字节";
+}
+
 // ----- Helpers copied from the worker (same semantics, Node APIs) -----
 
 function randomDigits(length) {
@@ -438,11 +448,21 @@ async function handleCreate(req, res) {
     return sendJson(res, 400, { error: "缺少 fileName，没法生成取件码。" });
   }
 
+  // Fail fast: a declared size over the cap can never upload successfully
+  // (the PUT stream would be torn down mid-transfer), so refuse here,
+  // before any record exists.
+  const meta = pickMeta(payload);
+  if (meta.sizeBytes > MAX_BYTES) {
+    return sendJson(res, 413, {
+      error: `文件太大了：单个应用最大支持 ${formatLimit(MAX_BYTES)}。`,
+    });
+  }
+
   const ttlSeconds = clampTtl(payload);
   const deleteToken = randomToken();
   const uploadToken = randomToken();
   const record = {
-    ...pickMeta(payload),
+    ...meta,
     deleteToken,
     uploadToken,
     uploaded: false,

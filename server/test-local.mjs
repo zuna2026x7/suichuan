@@ -4,7 +4,8 @@
 //
 // Spawns the real server on a random port with a temp data dir and drives
 // it over HTTP: full flow, a >10MB round trip, Range cases, oversize
-// rollback (with and without Content-Length), delete-token checks,
+// rollback (with and without Content-Length), a declared-oversize
+// create rejected up front, delete-token checks,
 // persistence across a restart, expiry after a restart, and finally a
 // natural TTL expiry (ttlSeconds=1 clamps to the 60s minimum — the wait
 // at the end is real, mirroring the worker's KV TTL floor).
@@ -59,14 +60,15 @@ function patterned(n) {
 }
 
 // ----- server process management -----
-async function startServer() {
+async function startServer(extraEnv = {}, dir = dataDir) {
   const child = spawn(process.execPath, ["index.js"], {
     cwd: serverDir,
     env: {
       ...process.env,
       PORT: "0",
       HOST: "127.0.0.1",
-      SUICHUAN_DATA_DIR: dataDir,
+      SUICHUAN_DATA_DIR: dir,
+      ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -198,6 +200,47 @@ try {
       (await res2.json()).error,
       "缺少 fileName，没法生成取件码。"
     );
+  }
+
+  // ----- POST /t fails fast on an oversize declaration (no record made) -----
+  {
+    const capDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "suichuan-node-cap-")
+    );
+    const capServer = await startServer(
+      { SUICHUAN_MAX_BYTES: String(1024 * 1024) },
+      capDir
+    );
+    try {
+      const over = await createTransfer(capServer.base, {
+        sizeBytes: String(2 * 1024 * 1024),
+      });
+      eq("POST /t oversize declaration -> 413", over.res.status, 413);
+      eq(
+        "POST /t oversize message",
+        over.body.error,
+        "文件太大了：单个应用最大支持 1MB。"
+      );
+      eq("POST /t oversize returns no code", over.body.code, undefined);
+      check(
+        "POST /t oversize wrote no record",
+        fs.readdirSync(path.join(capDir, "records")).length === 0,
+        fs.readdirSync(path.join(capDir, "records")).join(",")
+      );
+      // A normal create at/under the cap still succeeds afterwards.
+      const ok = await createTransfer(capServer.base, {
+        sizeBytes: "1024",
+      });
+      eq("POST /t normal create after 413", ok.res.status, 200);
+      check(
+        "Normal create code is 6 digits",
+        /^\d{6}$/.test(ok.body.code),
+        ok.body.code
+      );
+    } finally {
+      await stopServer(capServer.child);
+      fs.rmSync(capDir, { recursive: true, force: true });
+    }
   }
 
   // ----- Full flow, small patterned payload (app sends strings) -----

@@ -39,6 +39,9 @@ class ShareActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_PACKAGE_NAME = "extra_package_name"
+
+        /** Hard send ceiling: the pickup server rejects anything bigger. */
+        private const val MAX_SEND_BYTES = 2147483648L // 2 GiB
     }
 
     private lateinit var statusText: TextView
@@ -192,6 +195,15 @@ class ShareActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 showError(
                     "打包没有完成：${e.message ?: "未知问题"}。点重试再试一次。",
+                    offerFallback = false
+                )
+                return@thread
+            }
+            // Fail fast, before either upload route starts: an oversize
+            // package would only die partway through the upload.
+            if (packedFile.sizeBytes > MAX_SEND_BYTES) {
+                showError(
+                    "这个应用有 ${FormatUtil.size(packedFile.sizeBytes)}，超过了随传 2GB 的发送上限，暂时发不了。",
                     offerFallback = false
                 )
                 return@thread
