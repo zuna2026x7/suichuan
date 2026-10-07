@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Base style: required as the implicit parent of the dotted styles below
+         (Suichuan.BigButton / Suichuan.HintText), otherwise AAPT linking fails
+         with "resource style/Suichuan not found". -->
+    <style name="Suichuan" />
+
     <style name="Theme.Suichuan" parent="Theme.MaterialComponents.Light.NoActionBar">
         <item name="colorPrimary">@color/suichuan_primary</item>
         <item name="colorPrimaryDark">@color/suichuan_primary_dark</item>
