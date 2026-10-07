@@ -118,6 +118,34 @@ function sanitizeFileName(name) {
   return cleaned.length > 0 ? cleaned : "package.apk";
 }
 
+// Parse a single-range "Range: bytes=..." header against the file size.
+// Returns { start, end } (inclusive, end clamped to the last byte), the
+// string "unsatisfiable" when start is at/past EOF (caller answers 416),
+// or null when the header is absent or malformed and should be ignored
+// (caller serves the normal 200 full response). Multi-range headers are
+// not supported and count as malformed here.
+function parseRangeHeader(header, total) {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return null;
+  const first = match[1];
+  const last = match[2];
+  if (first === "" && last === "") return null;
+  let start;
+  let end;
+  if (first === "") {
+    // Suffix range "bytes=-N": the last N bytes of the file.
+    start = Math.max(total - Number(last), 0);
+    end = total - 1;
+  } else {
+    start = Number(first);
+    end = last === "" ? total - 1 : Math.min(Number(last), total - 1);
+  }
+  if (start >= total) return "unsatisfiable";
+  if (end < start) return null; // e.g. bytes=500-400: malformed, ignore it
+  return { start, end };
+}
+
 async function readRecord(env, code) {
   const stored = await env.TRANSFERS.get(code);
   if (stored === null) return null;
@@ -145,6 +173,10 @@ function remainingTtlSeconds(record) {
 // file bytes live. Interface:
 //   putFile(code, request, record) -> { size }   (throws on storage failure)
 //   getFile(code)                  -> { body, size, contentType } | null
+//   getFileInfo(code)              -> { size, contentType } | null
+//   getFileRange(code, start, end) -> { body, size, contentType } | null
+//                                     (start/end inclusive; only the bytes
+//                                     of that range are ever read/buffered)
 //   deleteFile(code)               -> removes whatever putFile wrote
 //
 // R2 backend (env.FILES bound): the original behavior — one object at
@@ -176,6 +208,30 @@ function fileStorage(env) {
         return {
           body: object.body,
           size: object.size,
+          contentType:
+            (object.httpMetadata && object.httpMetadata.contentType) ||
+            APK_CONTENT_TYPE,
+        };
+      },
+      async getFileInfo(code) {
+        const head = await env.FILES.head("files/" + code);
+        if (head === null) return null;
+        return {
+          size: head.size,
+          contentType:
+            (head.httpMetadata && head.httpMetadata.contentType) ||
+            APK_CONTENT_TYPE,
+        };
+      },
+      async getFileRange(code, start, end) {
+        // R2 serves the range itself; only the requested bytes come back.
+        const object = await env.FILES.get("files/" + code, {
+          range: { offset: start, length: end - start + 1 },
+        });
+        if (object === null) return null;
+        return {
+          body: object.body,
+          size: end - start + 1,
           contentType:
             (object.httpMetadata && object.httpMetadata.contentType) ||
             APK_CONTENT_TYPE,
@@ -272,6 +328,57 @@ function fileStorage(env) {
       return {
         body,
         size: manifest.sizeBytes,
+        contentType: manifest.contentType || APK_CONTENT_TYPE,
+      };
+    },
+
+    async getFileInfo(code) {
+      const manifest = await readManifest(code);
+      if (manifest === null) return null;
+      return {
+        size: manifest.sizeBytes,
+        contentType: manifest.contentType || APK_CONTENT_TYPE,
+      };
+    },
+
+    async getFileRange(code, start, end) {
+      const manifest = await readManifest(code);
+      if (manifest === null) return null;
+      // Fetch only the chunks the range overlaps and slice off the edges:
+      // a segment request touches at most a couple of 10 MiB chunks, never
+      // the whole file.
+      const firstChunk = Math.floor(start / CHUNK_SIZE_BYTES);
+      const lastChunk = Math.floor(end / CHUNK_SIZE_BYTES);
+      const parts = [];
+      let length = 0;
+      for (let i = firstChunk; i <= lastChunk; i++) {
+        const buf = await kv.get(chunkKey(code, i), "arrayBuffer");
+        if (buf === null) {
+          // A chunk vanished (e.g. its TTL fired): treat the file as gone
+          // rather than serving a range with a hole in it.
+          return null;
+        }
+        const chunkStart = i * CHUNK_SIZE_BYTES;
+        const from = Math.max(start - chunkStart, 0);
+        const to = Math.min(end - chunkStart + 1, buf.byteLength);
+        const slice = new Uint8Array(buf, from, to - from);
+        parts.push(slice);
+        length += slice.length;
+      }
+      let body;
+      if (parts.length === 1) {
+        body = parts[0];
+      } else {
+        body = new Uint8Array(length);
+        let offset = 0;
+        for (const part of parts) {
+          body.set(part, offset);
+          offset += part.length;
+        }
+      }
+      return {
+        body,
+        size: length,
         contentType: manifest.contentType || APK_CONTENT_TYPE,
       };
     },
@@ -427,14 +534,58 @@ export default {
       if (record === null || record.uploaded !== true) {
         return jsonResponse({ error: "文件还没有上传好，或者已经过期了。" }, 404);
       }
-      const file = await fileStorage(env).getFile(code);
+      const storage = fileStorage(env);
+      const info = await storage.getFileInfo(code);
+      if (info === null) {
+        return jsonResponse({ error: "文件不存在，可能已经过期了。" }, 404);
+      }
+      const disposition =
+        'attachment; filename="' + sanitizeFileName(record.fileName) + '"';
+
+      // HTTP Range support: the app downloads big files as parallel
+      // segments, because a single cross-border stream is often throttled.
+      const range = parseRangeHeader(request.headers.get("Range"), info.size);
+      if (range === "unsatisfiable") {
+        return new Response(
+          JSON.stringify({ error: "请求的下载范围不对。" }),
+          {
+            status: 416,
+            headers: {
+              "Content-Type": "application/json; charset=utf-8",
+              "Content-Range": "bytes */" + info.size,
+              "Accept-Ranges": "bytes",
+              ...CORS_HEADERS,
+            },
+          }
+        );
+      }
+      if (range) {
+        const part = await storage.getFileRange(code, range.start, range.end);
+        if (part === null) {
+          return jsonResponse({ error: "文件不存在，可能已经过期了。" }, 404);
+        }
+        return new Response(part.body, {
+          status: 206,
+          headers: {
+            "Content-Type": part.contentType || APK_CONTENT_TYPE,
+            "Content-Disposition": disposition,
+            "Content-Range":
+              "bytes " + range.start + "-" + range.end + "/" + info.size,
+            "Content-Length": String(range.end - range.start + 1),
+            "Accept-Ranges": "bytes",
+            "Access-Control-Allow-Origin": "*",
+          },
+        });
+      }
+
+      const file = await storage.getFile(code);
       if (file === null) {
         return jsonResponse({ error: "文件不存在，可能已经过期了。" }, 404);
       }
       const headers = {
         "Content-Type": file.contentType || APK_CONTENT_TYPE,
-        "Content-Disposition":
-          'attachment; filename="' + sanitizeFileName(record.fileName) + '"',
+        "Content-Disposition": disposition,
+        "Accept-Ranges": "bytes",
         "Access-Control-Allow-Origin": "*",
       };
       if (typeof file.size === "number") {

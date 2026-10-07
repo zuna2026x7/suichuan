@@ -82,11 +82,32 @@ class MockR2 {
     // Like real R2, put() resolves to an object descriptor with a size.
     return { key, size: bytes.length };
   }
-  async get(key) {
+  async get(key, options = {}) {
+    const entry = this.store.get(key);
+    if (!entry) return null;
+    let bytes = entry.bytes;
+    if (options.range) {
+      // Like real R2: only the requested byte range comes back, while the
+      // descriptor's size stays the full object size.
+      const offset = options.range.offset || 0;
+      const length = options.range.length;
+      bytes = entry.bytes.slice(
+        offset,
+        length === undefined ? undefined : offset + length
+      );
+    }
+    return {
+      body: new Response(bytes).body,
+      size: entry.bytes.length,
+      httpMetadata: entry.httpMetadata,
+      customMetadata: entry.customMetadata,
+    };
+  }
+  async head(key) {
     const entry = this.store.get(key);
     if (!entry) return null;
     return {
-      body: new Response(entry.bytes).body,
+      key,
       size: entry.bytes.length,
       httpMetadata: entry.httpMetadata,
       customMetadata: entry.customMetadata,
@@ -126,6 +147,82 @@ function fileKeysOf(env, code) {
   return [...env.TRANSFERS.store.keys()].filter((k) =>
     k.startsWith("file:" + code + ":")
   );
+}
+
+// ----- HTTP Range checks, run once per storage mode -----
+// `bytes` is the full payload that GET /f/:code serves for `code`; it must
+// be at least a few KB so the tail/suffix offsets below stay in bounds.
+async function runRangeTests(env, mode, code, bytes) {
+  const total = bytes.length;
+  const get = (range) =>
+    range === undefined
+      ? call(env, "GET", "/f/" + code)
+      : call(env, "GET", "/f/" + code, { headers: { Range: range } });
+
+  // bytes=0-99 -> exactly the first 100 bytes, 206, correct Content-Range.
+  let res = await get("bytes=0-99");
+  assert.equal(res.status, 206, `[${mode}] range request should be 206`);
+  assert.equal(res.headers.get("Content-Range"), `bytes 0-99/${total}`);
+  assert.equal(res.headers.get("Content-Length"), "100");
+  assert.equal(res.headers.get("Accept-Ranges"), "bytes");
+  assert.equal(
+    res.headers.get("Content-Type"),
+    "application/vnd.android.package-archive"
+  );
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), bytes.slice(0, 100));
+  console.log(`[${mode}] Range bytes=0-99 -> 206, exact slice, Content-Range ok`);
+
+  // Open-ended bytes=N- -> from N to EOF.
+  const tailStart = total - 1000;
+  res = await get(`bytes=${tailStart}-`);
+  assert.equal(res.status, 206);
+  assert.equal(
+    res.headers.get("Content-Range"),
+    `bytes ${tailStart}-${total - 1}/${total}`
+  );
+  assert.equal(res.headers.get("Content-Length"), "1000");
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), bytes.slice(tailStart));
+  console.log(`[${mode}] Range bytes=${tailStart}- (open-ended) -> tail bytes ok`);
+
+  // Suffix bytes=-500 -> the last 500 bytes.
+  res = await get("bytes=-500");
+  assert.equal(res.status, 206);
+  assert.equal(
+    res.headers.get("Content-Range"),
+    `bytes ${total - 500}-${total - 1}/${total}`
+  );
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), bytes.slice(total - 500));
+  console.log(`[${mode}] Range bytes=-500 (suffix) -> last 500 bytes ok`);
+
+  // An end past EOF is clamped, not an error.
+  res = await get(`bytes=${total - 10}-${total + 9999}`);
+  assert.equal(res.status, 206);
+  assert.equal(
+    res.headers.get("Content-Range"),
+    `bytes ${total - 10}-${total - 1}/${total}`
+  );
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), bytes.slice(total - 10));
+  console.log(`[${mode}] Range end past EOF -> clamped to last byte`);
+
+  // Start at/past EOF -> 416 with Content-Range: bytes */total.
+  res = await get(`bytes=${total}-`);
+  assert.equal(res.status, 416, `[${mode}] start == size should be 416`);
+  assert.equal(res.headers.get("Content-Range"), `bytes */${total}`);
+  res = await get(`bytes=${total + 12345}-`);
+  assert.equal(res.status, 416, `[${mode}] start > size should be 416`);
+  assert.equal(res.headers.get("Content-Range"), `bytes */${total}`);
+  console.log(`[${mode}] Range start at/past EOF -> 416, Content-Range bytes */${total}`);
+
+  // Unparseable Range -> ignored; normal 200 full response.
+  res = await get("banana");
+  assert.equal(res.status, 200, `[${mode}] garbage Range should fall back to 200`);
+  assert.equal(res.headers.get("Accept-Ranges"), "bytes");
+  assert.equal(res.headers.get("Content-Length"), String(total));
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), bytes);
+  res = await get("bytes=0-1,3-4");
+  assert.equal(res.status, 200, `[${mode}] multi-range should fall back to 200`);
+  await res.arrayBuffer(); // drain
+  console.log(`[${mode}] Range garbage / multi-range -> ignored, 200 full body`);
 }
 
 // ----- The full flow, run once per storage mode -----
@@ -177,6 +274,8 @@ async function runFlow(env, mode) {
     res.headers.get("Content-Type"),
     "application/vnd.android.package-archive"
   );
+  assert.equal(res.headers.get("Accept-Ranges"), "bytes", "plain GET should advertise range support");
+  assert.equal(res.headers.get("Content-Length"), String(payloadBytes.length));
   assert.match(res.headers.get("Content-Disposition") || "", /test\.apk/);
   const downloaded = new Uint8Array(await res.arrayBuffer());
   assert.deepEqual(downloaded, payloadBytes, "downloaded bytes must be identical");
@@ -227,6 +326,19 @@ assert.notEqual(await envR2.FILES.get("files/999999"), null);
 await worker.scheduled({ cron: "0 * * * *" }, envR2, { waitUntil() {} });
 assert.equal(await envR2.FILES.get("files/999999"), null, "orphan should be removed by scheduled()");
 console.log("[R2] scheduled() -> orphan R2 object removed");
+
+// 10. Range downloads against the R2-backed file (2 MiB patterned payload)
+const r2RangeBytes = new Uint8Array(2 * 1024 * 1024);
+for (let i = 0; i < r2RangeBytes.length; i++) r2RangeBytes[i] = i % 251;
+let rRes = await call(envR2, "POST", "/t", {
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ ...meta, sizeBytes: String(r2RangeBytes.length), fileName: "range.apk" }),
+});
+assert.equal(rRes.status, 200);
+const r2Range = await json(rRes);
+rRes = await call(envR2, "PUT", "/f/" + r2Range.uploadToken, { body: r2RangeBytes });
+assert.equal(rRes.status, 200, "R2 range-test upload should succeed");
+await runRangeTests(envR2, "R2", r2Range.code, r2RangeBytes);
 console.log("R2 MODE PASSED");
 
 // ================= KV mode (no FILES binding) =================
@@ -275,6 +387,30 @@ const bigDownloaded = new Uint8Array(await res.arrayBuffer());
 assert.equal(bigDownloaded.length, BIG_SIZE);
 assert.deepEqual(bigDownloaded, bigBytes, "multi-chunk download must be byte-identical");
 console.log("[KV] GET /f/:code -> 23 MiB byte-identical round trip");
+
+// ----- Range downloads against the chunked-KV file -----
+await runRangeTests(envKV, "KV", big.code, bigBytes);
+
+// A range spanning the 10 MiB chunk boundary must be byte-identical to the
+// same slice of the original (this is where chunk slicing usually breaks).
+const CHUNK = 10 * 1024 * 1024;
+const spanStart = CHUNK - 50;
+const spanEnd = CHUNK + 49;
+res = await call(envKV, "GET", "/f/" + big.code, {
+  headers: { Range: `bytes=${spanStart}-${spanEnd}` },
+});
+assert.equal(res.status, 206);
+assert.equal(
+  res.headers.get("Content-Range"),
+  `bytes ${spanStart}-${spanEnd}/${BIG_SIZE}`
+);
+assert.equal(res.headers.get("Content-Length"), "100");
+assert.deepEqual(
+  new Uint8Array(await res.arrayBuffer()),
+  bigBytes.slice(spanStart, spanEnd + 1),
+  "range spanning a chunk boundary must be byte-identical"
+);
+console.log("[KV] Range spanning the 10 MiB chunk boundary -> byte-identical");
 
 // ----- Oversize upload WITHOUT Content-Length: chunks written, then rolled back -----
 res = await call(envKV, "POST", "/t", {
