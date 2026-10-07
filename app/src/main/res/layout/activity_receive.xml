@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="接收应用"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <TextView
+            style="@style/Suichuan.HintText"
+            android:text="输入对方给你的取件码，或者把对方分享的整段文字、下载链接粘贴到这里。" />
+
+        <EditText
+            android:id="@+id/edit_input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:gravity="top"
+            android:hint="取件码 / 分享文字 / 链接"
+            android:importantForAutofill="no"
+            android:inputType="textMultiLine"
+            android:minLines="2" />
+
+        <Button
+            android:id="@+id/button_fetch"
+            style="@style/Suichuan.BigButton"
+            android:text="开始接收" />
+
+        <TextView
+            android:id="@+id/text_status"
+            style="@style/Suichuan.HintText" />
+
+        <ProgressBar
+            android:id="@+id/progress_download"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:max="100"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/layout_confirm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="下载完成，确认安装："
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/text_confirm_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textSize="20sp" />
+
+            <TextView
+                android:id="@+id/text_confirm_detail"
+                style="@style/Suichuan.HintText" />
+
+            <TextView
+                style="@style/Suichuan.HintText"
+                android:text="提醒：这里只安装应用本身，不包含对方手机里的账号和数据。银行、支付类应用装好后也可能因为设备不同而用不了。" />
+
+            <Button
+                android:id="@+id/button_install"
+                style="@style/Suichuan.BigButton"
+                android:text="安装" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

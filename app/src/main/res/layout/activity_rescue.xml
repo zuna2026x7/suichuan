@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="安装收到的安装包"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <TextView
+            style="@style/Suichuan.HintText"
+            android:text="QQ、微信收到的安装包，名字常被改得打不开。不用改名：在这里选它，或者在 QQ/微信里点那个文件、选「用其他应用打开」再选随传，我们只看内容、不看名字，确认是安装包就直接装。" />
+
+        <Button
+            android:id="@+id/button_pick"
+            style="@style/Suichuan.BigButton"
+            android:text="选择收到的文件" />
+
+        <TextView
+            android:id="@+id/text_status"
+            style="@style/Suichuan.HintText" />
+
+        <Button
+            android:id="@+id/button_install"
+            style="@style/Suichuan.BigButton"
+            android:text="安装"
+            android:visibility="gone" />
+    </LinearLayout>
+</ScrollView>

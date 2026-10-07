@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="随传"
+            android:textSize="36sp"
+            android:textStyle="bold" />
+
+        <TextView
+            style="@style/Suichuan.HintText"
+            android:text="把这台手机上的应用，通过网络传到另一台手机。不用连同一个 Wi-Fi，也不用改文件名。" />
+
+        <Button
+            android:id="@+id/button_send"
+            style="@style/Suichuan.BigButton"
+            android:text="发送应用" />
+
+        <Button
+            android:id="@+id/button_receive"
+            style="@style/Suichuan.BigButton"
+            android:text="输入取件码" />
+
+        <Button
+            android:id="@+id/button_rescue"
+            style="@style/Suichuan.BigButton"
+            android:text="安装 QQ/微信收到的安装包" />
+
+        <TextView
+            style="@style/Suichuan.HintText"
+            android:text="QQ、微信收到的安装包经常打不开（名字被改了），用第三个入口选它就能直接安装，不用去文件管理器改名。" />
+    </LinearLayout>
+</ScrollView>

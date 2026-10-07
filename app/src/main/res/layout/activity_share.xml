@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:id="@+id/text_app_name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/text_status"
+            style="@style/Suichuan.HintText"
+            android:text="正在准备…" />
+
+        <ProgressBar
+            android:id="@+id/progress_upload"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:max="100" />
+
+        <Button
+            android:id="@+id/button_retry"
+            style="@style/Suichuan.BigButton"
+            android:text="重试"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/layout_result"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="取件码（72 小时内有效）"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/text_code"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:gravity="center"
+                android:textSize="56sp"
+                android:textStyle="bold" />
+
+            <ImageView
+                android:id="@+id/image_qr"
+                android:layout_width="240dp"
+                android:layout_height="240dp"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="12dp"
+                android:contentDescription="取件二维码" />
+
+            <TextView
+                style="@style/Suichuan.HintText"
+                android:text="对方打开「随传」输入取件码，或者扫这个二维码、粘贴你分享的文字，都能收到。分享的是文字，不是文件，不会被改名。" />
+
+            <Button
+                android:id="@+id/button_share"
+                style="@style/Suichuan.BigButton"
+                android:text="发给微信 / QQ 好友" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>
