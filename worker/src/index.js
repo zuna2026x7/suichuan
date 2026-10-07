@@ -1,23 +1,31 @@
 // 随传取件服务 (Suichuan pickup service)
 //
-// A deliberately tiny Cloudflare Worker with two bindings:
-//   - KV namespace `TRANSFERS` — one record per pickup code: the transfer
-//     metadata (app name, size, checksum, file name), its tokens, and an
-//     `uploaded` flag. Records expire (max 72h).
-//   - R2 bucket `FILES` — the package file itself, at key `files/<code>`,
-//     but only when this backend is used. (The Android app falls back to
-//     Litterbox temporary hosting when no backend is configured.)
+// A deliberately tiny Cloudflare Worker. Bindings:
+//   - KV namespace `TRANSFERS` (required) — one record per pickup code: the
+//     transfer metadata (app name, size, checksum, file name), its tokens,
+//     and an `uploaded` flag. Records expire (max 72h). By default the
+//     package file itself also lives here, split into chunks (see the file
+//     storage section below).
+//   - R2 bucket `FILES` (optional) — if bound, the package file is stored as
+//     a single object at `files/<code>` instead of KV chunks. R2 requires a
+//     payment method on file even for its free tier, so the deployed MVP
+//     runs WITHOUT this binding; it stays as an opportunistic fast path if
+//     a bucket ever exists. (Independently, the Android app falls back to
+//     Litterbox temporary hosting when no backend is configured at all.)
 //
 // Flow:
 //   1. POST /t            sender registers metadata -> { code, deleteToken,
 //                         uploadToken } (uploadToken is single-use)
-//   2. PUT  /f/:token     sender uploads the raw file body -> stored in R2,
-//                         record marked uploaded, token key deleted
+//   2. PUT  /f/:token     sender uploads the raw file body -> stored via the
+//                         file-storage layer, record marked uploaded, token
+//                         key deleted
 //   3. GET  /t/:code      receiver reads metadata + { ready }
-//   4. GET  /f/:code      receiver downloads the file from R2
+//   4. GET  /f/:code      receiver downloads the file
 //   5. DELETE /t/:code    sender removes everything early (needs deleteToken)
-//   6. scheduled()        hourly: deletes R2 objects whose KV record has
-//                         already expired (orphans left behind by TTL)
+//   6. scheduled()        hourly: in R2 mode, deletes objects whose KV record
+//                         has already expired (orphans left behind by TTL);
+//                         KV-stored files expire with their record's TTL, so
+//                         there is nothing to sweep for them.
 //
 // Abuse note: a 6-digit code has only 1,000,000 combinations, so treat codes
 // as a convenience, not a secret. Entries expire quickly (max 72h), deletes
@@ -27,14 +35,16 @@
 // the full payload and does not strictly depend on this service.
 //
 // Cloudflare free-plan limits worth knowing: a request through a Worker can
-// carry at most ~100MB, so a single transfer is capped around that size, and
-// R2's free tier is 10GB of storage.
+// carry at most ~100MB, so a single transfer is capped around that size.
+// Workers KV's free tier is 1GB of total storage (25MB max per value, which
+// is why files are chunked at 10 MiB); R2's free tier is 10GB.
 
 const MAX_TTL_SECONDS = 72 * 60 * 60; // 72h
 const DEFAULT_TTL_SECONDS = 24 * 60 * 60; // 24h
 const MIN_TTL_SECONDS = 60; // KV rejects expirationTtl below 60
 const SIZE_SLACK_BYTES = 1024 * 1024; // tolerance for the upload size check
 const APK_CONTENT_TYPE = "application/vnd.android.package-archive";
+const CHUNK_SIZE_BYTES = 10 * 1024 * 1024; // KV file chunk size (cap is 25MB)
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -118,6 +128,158 @@ async function readRecord(env, code) {
   }
 }
 
+// How much of a record's TTL is left, in seconds. KV cannot extend an
+// existing key's expiry, so anything re-put (the record after upload, the
+// file keys) recomputes it from createdAt. The result is floored at 60s,
+// which can slightly extend a nearly-expired transfer; acceptable here.
+function remainingTtlSeconds(record) {
+  const elapsed = Math.floor((Date.now() - (record.createdAt || Date.now())) / 1000);
+  return Math.max(
+    MIN_TTL_SECONDS,
+    (record.ttlSeconds || DEFAULT_TTL_SECONDS) - elapsed
+  );
+}
+
+// ---------------------------------------------------------------------------
+// File storage abstraction — the only part of this Worker that knows where
+// file bytes live. Interface:
+//   putFile(code, request, record) -> { size }   (throws on storage failure)
+//   getFile(code)                  -> { body, size, contentType } | null
+//   deleteFile(code)               -> removes whatever putFile wrote
+//
+// R2 backend (env.FILES bound): the original behavior — one object at
+// `files/<code>`, streamed in and out.
+//
+// Workers KV backend (default): the file is split into 10 MiB chunks in the
+// same TRANSFERS namespace — `file:<code>:<index>` per chunk plus a manifest
+// `file:<code>:meta` (JSON: { chunks, sizeBytes, sha256, fileName,
+// contentType }). Every file key is written with the transfer record's
+// remaining TTL, so a file self-expires together with its record and needs
+// no cleanup sweep.
+// ---------------------------------------------------------------------------
+function fileStorage(env) {
+  if (env.FILES) {
+    return {
+      async putFile(code, request, record) {
+        const storedObject = await env.FILES.put("files/" + code, request.body, {
+          httpMetadata: { contentType: APK_CONTENT_TYPE },
+          customMetadata: {
+            sha256: record.sha256 || "",
+            fileName: record.fileName || "",
+          },
+        });
+        return { size: storedObject && storedObject.size };
+      },
+      async getFile(code) {
+        const object = await env.FILES.get("files/" + code);
+        if (object === null) return null;
+        return {
+          body: object.body,
+          size: object.size,
+          contentType:
+            (object.httpMetadata && object.httpMetadata.contentType) ||
+            APK_CONTENT_TYPE,
+        };
+      },
+      async deleteFile(code) {
+        await env.FILES.delete("files/" + code);
+      },
+    };
+  }
+
+  const kv = env.TRANSFERS;
+  const chunkKey = (code, index) => "file:" + code + ":" + index;
+  const manifestKey = (code) => "file:" + code + ":meta";
+
+  async function readManifest(code) {
+    const raw = await kv.get(manifestKey(code));
+    if (raw === null) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function deleteKvFile(code) {
+    const manifest = await readManifest(code);
+    await kv.delete(manifestKey(code));
+    if (manifest && typeof manifest.chunks === "number") {
+      for (let i = 0; i < manifest.chunks; i++) {
+        await kv.delete(chunkKey(code, i));
+      }
+    }
+  }
+
+  return {
+    async putFile(code, request, record) {
+      // The whole body is buffered in memory: KV values are discrete blobs,
+      // so there is no streaming write anyway — and the Workers memory
+      // limit is consistent with the ~100MB per-transfer cap noted above.
+      const buffer = await request.arrayBuffer();
+      const size = buffer.byteLength;
+      const chunks = Math.ceil(size / CHUNK_SIZE_BYTES);
+      const expirationTtl = remainingTtlSeconds(record);
+      try {
+        for (let i = 0; i < chunks; i++) {
+          const start = i * CHUNK_SIZE_BYTES;
+          const slice = buffer.slice(
+            start,
+            Math.min(start + CHUNK_SIZE_BYTES, size)
+          );
+          await kv.put(chunkKey(code, i), slice, { expirationTtl });
+        }
+        // Manifest last: its presence is what marks the file as complete.
+        const manifest = {
+          chunks,
+          sizeBytes: size,
+          sha256: record.sha256 || "",
+          fileName: record.fileName || "",
+          contentType: APK_CONTENT_TYPE,
+        };
+        await kv.put(manifestKey(code), JSON.stringify(manifest), {
+          expirationTtl,
+        });
+      } catch (e) {
+        // Don't leave a partial upload behind.
+        await deleteKvFile(code).catch(() => {});
+        throw e;
+      }
+      return { size };
+    },
+
+    async getFile(code) {
+      const manifest = await readManifest(code);
+      if (manifest === null) return null;
+      let index = 0;
+      const body = new ReadableStream({
+        async pull(controller) {
+          if (index >= manifest.chunks) {
+            controller.close();
+            return;
+          }
+          const buf = await kv.get(chunkKey(code, index), "arrayBuffer");
+          if (buf === null) {
+            // A chunk vanished (e.g. its TTL fired mid-download): fail the
+            // download instead of silently serving truncated bytes.
+            controller.error(new Error("文件不完整，缺少数据块。"));
+            return;
+          }
+          index += 1;
+          controller.enqueue(new Uint8Array(buf));
+        },
+      });
+      return {
+        body,
+        size: manifest.sizeBytes,
+        contentType: manifest.contentType || APK_CONTENT_TYPE,
+      };
+    },
+
+    deleteFile: deleteKvFile,
+  };
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -167,7 +329,8 @@ export default {
       return jsonResponse({ error: "取件码生成失败，请稍后再试。" }, 503);
     }
 
-    // PUT /f/:uploadToken — upload the raw package file into R2.
+    // PUT /f/:uploadToken — upload the raw package file into file storage
+    // (R2 if bound, chunked KV otherwise).
     // The token is single-use: its lookup key is deleted on success.
     if (request.method === "PUT" && parts.length === 2 && parts[0] === "f") {
       const uploadToken = parts[1];
@@ -185,9 +348,6 @@ export default {
       }
       if (record.uploaded) {
         return jsonResponse({ error: "这个文件已经上传过了。" }, 409);
-      }
-      if (!env.FILES) {
-        return jsonResponse({ error: "服务器还没有配置好文件存储。" }, 500);
       }
 
       // Size check, only when the client sent a Content-Length header:
@@ -210,28 +370,23 @@ export default {
         return jsonResponse({ error: "没有收到文件内容。" }, 400);
       }
 
-      let storedObject;
+      const storage = fileStorage(env);
+      let stored;
       try {
-        storedObject = await env.FILES.put("files/" + code, request.body, {
-          httpMetadata: { contentType: APK_CONTENT_TYPE },
-          customMetadata: {
-            sha256: record.sha256 || "",
-            fileName: record.fileName || "",
-          },
-        });
+        stored = await storage.putFile(code, request, record);
       } catch (e) {
         return jsonResponse({ error: "文件保存失败，请稍后再试。" }, 502);
       }
 
       // Authoritative size check: some clients send no Content-Length header
-      // (chunked uploads), so also verify what actually landed in R2 and
-      // roll it back if it is wildly different from the registered size.
+      // (chunked uploads), so also verify what actually landed in storage
+      // and roll it back if it is wildly different from the registered size.
       if (
-        storedObject &&
-        typeof storedObject.size === "number" &&
-        Math.abs(storedObject.size - record.sizeBytes) > SIZE_SLACK_BYTES
+        stored &&
+        typeof stored.size === "number" &&
+        Math.abs(stored.size - record.sizeBytes) > SIZE_SLACK_BYTES
       ) {
-        await env.FILES.delete("files/" + code);
+        await storage.deleteFile(code);
         return jsonResponse(
           { error: "上传的文件大小和登记的不一致，可能选错了文件。" },
           413
@@ -239,14 +394,10 @@ export default {
       }
 
       // Mark uploaded, keeping the record alive for (roughly) its remaining
-      // TTL — KV cannot extend the original expiry, so recompute it. The
-      // minimum is 60s, which can slightly extend a nearly-expired record;
-      // acceptable for this MVP.
-      const elapsed = Math.floor((Date.now() - (record.createdAt || Date.now())) / 1000);
-      const remaining = Math.max(MIN_TTL_SECONDS, (record.ttlSeconds || DEFAULT_TTL_SECONDS) - elapsed);
+      // TTL — KV cannot extend the original expiry, so recompute it.
       record.uploaded = true;
       await env.TRANSFERS.put(code, JSON.stringify(record), {
-        expirationTtl: remaining,
+        expirationTtl: remainingTtlSeconds(record),
       });
       // Single-use: the upload token dies here.
       await env.TRANSFERS.delete("upload:" + uploadToken);
@@ -266,7 +417,7 @@ export default {
       return jsonResponse(publicView(record));
     }
 
-    // GET /f/:code — receiver downloads the file straight from R2.
+    // GET /f/:code — receiver downloads the file from file storage.
     if (request.method === "GET" && parts.length === 2 && parts[0] === "f") {
       const code = parts[1];
       if (!/^\d{6}$/.test(code)) {
@@ -276,29 +427,25 @@ export default {
       if (record === null || record.uploaded !== true) {
         return jsonResponse({ error: "文件还没有上传好，或者已经过期了。" }, 404);
       }
-      if (!env.FILES) {
-        return jsonResponse({ error: "服务器还没有配置好文件存储。" }, 500);
-      }
-      const object = await env.FILES.get("files/" + code);
-      if (object === null) {
+      const file = await fileStorage(env).getFile(code);
+      if (file === null) {
         return jsonResponse({ error: "文件不存在，可能已经过期了。" }, 404);
       }
       const headers = {
-        "Content-Type":
-          (object.httpMetadata && object.httpMetadata.contentType) || APK_CONTENT_TYPE,
+        "Content-Type": file.contentType || APK_CONTENT_TYPE,
         "Content-Disposition":
           'attachment; filename="' + sanitizeFileName(record.fileName) + '"',
         "Access-Control-Allow-Origin": "*",
       };
-      if (typeof object.size === "number") {
-        headers["Content-Length"] = String(object.size);
+      if (typeof file.size === "number") {
+        headers["Content-Length"] = String(file.size);
       }
-      return new Response(object.body, { status: 200, headers });
+      return new Response(file.body, { status: 200, headers });
     }
 
     // DELETE /t/:code — sender-side early removal; needs the deleteToken
     // either as ?token=... or as an "x-delete-token" header. Removes the KV
-    // record, any leftover upload-token key, and the R2 object.
+    // record, any leftover upload-token key, and the stored file.
     if (request.method === "DELETE" && parts.length === 2 && parts[0] === "t") {
       const code = parts[1];
       const token =
@@ -314,9 +461,7 @@ export default {
       if (record.uploadToken) {
         await env.TRANSFERS.delete("upload:" + record.uploadToken);
       }
-      if (env.FILES) {
-        await env.FILES.delete("files/" + code);
-      }
+      await fileStorage(env).deleteFile(code);
       return jsonResponse({ ok: true });
     }
 
@@ -328,8 +473,12 @@ export default {
   },
 
   // Hourly cleanup (Cron Trigger "0 * * * *"): a transfer's KV record dies
-  // with its TTL, but its R2 object would live forever — delete any object
-  // whose pickup code no longer has a KV record.
+  // with its TTL, but in R2 mode its object would live forever — delete any
+  // object whose pickup code no longer has a KV record.
+  //
+  // KV-stored files need no sweep: every chunk and manifest was written
+  // with the record's TTL, so they expire on their own. Without an R2
+  // binding this handler is deliberately a no-op.
   //
   // Limitation (fine for MVP): only the first page of the R2 listing is
   // scanned (up to 1000 objects). If the bucket ever grows past that, page

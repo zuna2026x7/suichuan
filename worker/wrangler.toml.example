@@ -1,8 +1,10 @@
 # Copy this file to wrangler.toml and fill in your own values.
 #   cp wrangler.toml.example wrangler.toml
-# Create the KV namespace and the R2 bucket first:
+# Create the KV namespace first:
 #   npx wrangler kv namespace create TRANSFERS
-#   npx wrangler r2 bucket create suichuan-files
+# No R2 bucket is needed: files are stored chunked inside the same KV
+# namespace by default (R2 requires a payment method on file, even for the
+# free tier).
 
 name = "suichuan-pickup"
 main = "src/index.js"
@@ -10,16 +12,23 @@ compatibility_date = "2024-09-23"
 workers_dev = true
 
 # Transfer records: metadata + tokens under each 6-digit pickup code.
+# The package files themselves also live here by default, as chunks:
+# file:<code>:<index> plus a file:<code>:meta manifest, same TTL.
 [[kv_namespaces]]
 binding = "TRANSFERS"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 
-# The package files themselves: files/<pickup code>, uploaded and downloaded
-# through the Worker.
-[[r2_buckets]]
-binding = "FILES"
-bucket_name = "suichuan-files"
+# OPTIONAL upgrade — R2 file storage. Only if the account ever gets a
+# payment method and R2 is enabled:
+#   npx wrangler r2 bucket create suichuan-files
+# then uncomment this block. With a FILES binding present, the Worker
+# stores each package as one R2 object (files/<pickup code>) instead of
+# KV chunks; nothing else changes.
+# [[r2_buckets]]
+# binding = "FILES"
+# bucket_name = "suichuan-files"
 
-# Hourly cleanup of R2 objects whose KV record has expired.
+# Hourly cleanup: sweeps R2 objects whose KV record has expired.
+# In KV-only mode this is a harmless no-op (file chunks self-expire).
 [triggers]
 crons = ["0 * * * *"]
