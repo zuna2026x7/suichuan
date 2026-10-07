@@ -46,6 +46,9 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.zxing:core:3.5.3")
+    // Embedded barcode scanner (camera QR capture) for the receive screen.
+    // 4.3.0 pulls zxing core 3.5.x, compatible with the pin above.
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     testImplementation("junit:junit:4.13.2")
 }

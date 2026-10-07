@@ -46,6 +46,7 @@ class ShareActivity : AppCompatActivity() {
     private lateinit var retryButton: Button
     private lateinit var fallbackButton: Button
     private lateinit var resultLayout: LinearLayout
+    private lateinit var codeLabel: TextView
     private lateinit var codeText: TextView
     private lateinit var qrImage: ImageView
     private lateinit var shareButton: Button
@@ -64,6 +65,7 @@ class ShareActivity : AppCompatActivity() {
         retryButton = findViewById(R.id.button_retry)
         fallbackButton = findViewById(R.id.button_fallback)
         resultLayout = findViewById(R.id.layout_result)
+        codeLabel = findViewById(R.id.text_code_label)
         codeText = findViewById(R.id.text_code)
         qrImage = findViewById(R.id.image_qr)
         shareButton = findViewById(R.id.button_share)
@@ -237,9 +239,23 @@ class ShareActivity : AppCompatActivity() {
         runOnUiThread {
             working = false
             progressBar.visibility = View.GONE
-            statusText.text = "上传完成！72 小时内有效，过期就没了，抓紧让对方接收。"
             resultLayout.visibility = View.VISIBLE
-            codeText.text = pickupCode ?: "扫码接收"
+            if (pickupCode != null) {
+                statusText.text = "上传完成！72 小时内有效，过期就没了，抓紧让对方接收。"
+                codeLabel.visibility = View.VISIBLE
+                codeText.visibility = View.VISIBLE
+                codeText.text = pickupCode
+            } else {
+                // Temporary-hosting route: there is no pickup code, so the
+                // giant code area must not pretend there is one. The share
+                // text (or the QR below) is the only way across — say so.
+                statusText.text = "上传完成！这个发送方式没有取件码。" +
+                    "点下面「发给微信 / QQ 好友」把文字发给对方，对方在接收页粘贴就能收到；" +
+                    "对方也可以用接收页的扫码来扫这个二维码。"
+                codeLabel.visibility = View.GONE
+                codeText.text = ""
+                codeText.visibility = View.GONE
+            }
             shareText = text
             try {
                 qrImage.setImageBitmap(QrUtil.bitmapFor(text))

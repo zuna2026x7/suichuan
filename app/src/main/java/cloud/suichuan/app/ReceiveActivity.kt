@@ -1,5 +1,8 @@
 package cloud.suichuan.app
 
+import android.Manifest
+import android.content.ClipboardManager
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
@@ -9,6 +12,9 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import cloud.suichuan.app.install.InstallPermissionHelper
 import cloud.suichuan.app.install.Installer
 import cloud.suichuan.app.model.TransferPayload
@@ -22,10 +28,11 @@ import java.io.File
 import kotlin.concurrent.thread
 
 /**
- * Receives a transfer three ways: a 6-digit pickup code (needs the code
- * worker), a pasted share message, or a bare download link. The file lands
- * in our private cache — the user never sees a file name, so nothing can be
- * renamed into something uninstallable.
+ * Receives a transfer four ways: a 6-digit pickup code (needs the code
+ * worker), a pasted share message, a bare download link, or an in-app QR
+ * scan. However the content arrives, it funnels into [processInput]. The
+ * file lands in our private cache — the user never sees a file name, so
+ * nothing can be renamed into something uninstallable.
  */
 class ReceiveActivity : AppCompatActivity() {
 
@@ -40,6 +47,25 @@ class ReceiveActivity : AppCompatActivity() {
     private var downloadedKind: ApkInspector.Kind = ApkInspector.Kind.INVALID
     private var busy = false
 
+    // QR scanner, registered as a field so the launcher exists before any
+    // click handler can run. A null contents means the scan produced
+    // nothing: either the user backed out (stay quiet) or the camera
+    // permission was denied inside the scanner (offer the paste route).
+    private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
+        val contents = result.contents
+        when {
+            contents != null -> processInput(contents)
+            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) !=
+                PackageManager.PERMISSION_GRANTED ->
+                Toast.makeText(
+                    this,
+                    "没有相机权限，扫不了码。可以让对方把分享文字发给你，复制后点「粘贴剪贴板内容」，或者直接输入取件码。",
+                    Toast.LENGTH_LONG
+                ).show()
+            else -> Unit // user cancelled the scan: stay quiet
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_receive)
@@ -52,12 +78,18 @@ class ReceiveActivity : AppCompatActivity() {
         confirmDetail = findViewById(R.id.text_confirm_detail)
 
         findViewById<Button>(R.id.button_fetch).setOnClickListener {
-            val raw = inputEdit.text.toString()
-            if (raw.isBlank()) {
-                statusText.text = "先粘贴取件码、分享文字或链接，再点开始接收。"
-            } else {
-                resolveAndDownload(raw.trim())
-            }
+            processInput(inputEdit.text.toString())
+        }
+        findViewById<Button>(R.id.button_scan).setOnClickListener {
+            val options = ScanOptions()
+                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                .setPrompt("把取件二维码放进框里")
+                .setBeepEnabled(false)
+                .setBarcodeImageEnabled(false)
+            scanLauncher.launch(options)
+        }
+        findViewById<Button>(R.id.button_paste).setOnClickListener {
+            pasteFromClipboard()
         }
         findViewById<Button>(R.id.button_install).setOnClickListener {
             val file = downloadedFile
@@ -73,6 +105,39 @@ class ReceiveActivity : AppCompatActivity() {
                 Toast.makeText(this, "安装没有打开：${e.message ?: "未知问题"}", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    /**
+     * The single entry point for everything the receiver provides: text
+     * typed into the input box, a scanned QR code, or clipboard content.
+     * All of them behave identically from here on.
+     */
+    private fun processInput(raw: String) {
+        val trimmed = raw.trim()
+        if (trimmed.isBlank()) {
+            statusText.text = "先粘贴取件码、分享文字或链接，再点开始接收。"
+        } else {
+            resolveAndDownload(trimmed)
+        }
+    }
+
+    /** Reads the clipboard, drops its text into the input box, and runs it. */
+    private fun pasteFromClipboard() {
+        val clipboard = getSystemService(ClipboardManager::class.java)
+        val text = clipboard
+            ?.takeIf { it.hasPrimaryClip() }
+            ?.primaryClip
+            ?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.coerceToText(this)
+            ?.toString()
+            ?.trim()
+        if (text.isNullOrBlank()) {
+            Toast.makeText(this, "剪贴板是空的，先去复制取件码或分享文字", Toast.LENGTH_LONG).show()
+            return
+        }
+        inputEdit.setText(text)
+        processInput(text)
     }
 
     private fun resolveAndDownload(raw: String) {

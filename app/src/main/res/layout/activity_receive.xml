@@ -18,7 +18,17 @@
 
         <TextView
             style="@style/Suichuan.HintText"
-            android:text="输入对方给你的取件码，或者把对方分享的整段文字、下载链接粘贴到这里。" />
+            android:text="扫一扫对方的二维码，或者输入对方给你的取件码，也可以把对方分享的整段文字、下载链接粘贴到这里。" />
+
+        <Button
+            android:id="@+id/button_scan"
+            style="@style/Suichuan.BigButton"
+            android:text="扫码接收" />
+
+        <Button
+            android:id="@+id/button_paste"
+            style="@style/Suichuan.BigButton"
+            android:text="粘贴剪贴板内容" />
 
         <EditText
             android:id="@+id/edit_input"
