@@ -11,7 +11,10 @@ data class TransferPayload(
     val sizeBytes: Long,
     val sha256: String,
     val fileName: String,
-    val downloadUrl: String
+    // Optional: empty when the file lives behind our own pickup backend and
+    // is addressed by code instead of a direct URL (backend mode fills in
+    // "<base>/f/<code>" once the code is known).
+    val downloadUrl: String = ""
 ) {
     fun toMap(): Map<String, String> = linkedMapOf(
         "appName" to appName,
@@ -25,7 +28,14 @@ data class TransferPayload(
 
     companion object {
         fun fromMap(map: Map<String, String>): TransferPayload? {
-            val downloadUrl = map["downloadUrl"]?.takeIf { it.isNotBlank() } ?: return null
+            // A map with nothing identifiable in it is not a payload at all.
+            if (map["appName"].isNullOrBlank() &&
+                map["packageName"].isNullOrBlank() &&
+                map["fileName"].isNullOrBlank() &&
+                map["downloadUrl"].isNullOrBlank()
+            ) {
+                return null
+            }
             return TransferPayload(
                 appName = map["appName"] ?: "",
                 packageName = map["packageName"] ?: "",
@@ -33,7 +43,7 @@ data class TransferPayload(
                 sizeBytes = map["sizeBytes"]?.toLongOrNull() ?: 0L,
                 sha256 = map["sha256"] ?: "",
                 fileName = map["fileName"] ?: "",
-                downloadUrl = downloadUrl
+                downloadUrl = map["downloadUrl"] ?: ""
             )
         }
     }

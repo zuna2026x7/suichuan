@@ -48,8 +48,27 @@ class PayloadCodecTest {
     @Test
     fun parserRejectsGarbage() {
         assertNull(PayloadCodec.decode("not json at all"))
-        assertNull(PayloadCodec.decode("""{"appName":"A"}""")) // no downloadUrl
+        assertNull(PayloadCodec.decode("""{"unrelated":"x"}""")) // nothing identifiable
         assertNull(PayloadCodec.extractFromText("取件码：123456"))
+    }
+
+    @Test
+    fun roundTripWithoutDownloadUrl() {
+        // Backend mode: the payload is addressed by pickup code, so there is
+        // no direct download URL yet — it must still round-trip.
+        val payload = sample().copy(downloadUrl = "")
+        val decoded = PayloadCodec.decode(PayloadCodec.encode(payload))
+        assertEquals(payload, decoded)
+    }
+
+    @Test
+    fun backendRecordWithoutDownloadUrlDecodes() {
+        // What GET /t/:code returns: metadata + ready, no downloadUrl field.
+        val json = """{"appName":"A","packageName":"p","versionName":"1","sizeBytes":42,"sha256":"s","fileName":"f.apk","ready":true}"""
+        val decoded = PayloadCodec.decode(json)
+        assertNotNull(decoded)
+        assertEquals("", decoded!!.downloadUrl)
+        assertEquals("f.apk", decoded.fileName)
     }
 
     @Test

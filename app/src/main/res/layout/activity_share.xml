@@ -35,6 +35,12 @@
             android:text="重试"
             android:visibility="gone" />
 
+        <Button
+            android:id="@+id/button_fallback"
+            style="@style/Suichuan.BigButton"
+            android:text="改用临时托管发送"
+            android:visibility="gone" />
+
         <LinearLayout
             android:id="@+id/layout_result"
             android:layout_width="match_parent"

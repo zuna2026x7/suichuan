@@ -137,18 +137,40 @@ class ReceiveActivity : AppCompatActivity() {
         }
     }
 
-    private fun resolvePayload(raw: String): TransferPayload {
-        // (a) 6-digit pickup code.
-        if (raw.matches(Regex("^\\d{6}$"))) {
-            val base = BuildConfig.TRANSFER_API_BASE
-            if (base.isBlank()) {
-                throw IllegalStateException("这个版本还没有配置取件码服务。请让对方把分享的整段文字发给你，粘贴到这里接收。")
-            }
-            return BackendClient.fetchByCode(base, raw)
+    /** Fetches a transfer by code from our backend, checking it is ready. */
+    private fun fetchByCode(code: String): TransferPayload {
+        val base = BuildConfig.TRANSFER_API_BASE
+        if (base.isBlank()) {
+            throw IllegalStateException("这个版本还没有配置取件码服务。请让对方把分享的整段文字发给你，粘贴到这里接收。")
         }
-        // (b) Pasted share text containing the encoded payload.
+        val fetched = BackendClient.fetchTransfer(base, code)
+        if (!fetched.ready) {
+            throw IllegalStateException("对方还没上传完，请稍后再试。等对方那边显示上传完成后，再回来点开始接收。")
+        }
+        return fetched.payload
+    }
+
+    /** Finds a "取件码：123456" (or a lone 6-digit line) inside pasted text. */
+    private fun extractPickupCode(text: String): String? {
+        Regex("取件码[:：]?\\s*(\\d{6})").find(text)?.let { return it.groupValues[1] }
+        return text.lines()
+            .map { it.trim() }
+            .firstOrNull { it.matches(Regex("^\\d{6}$")) }
+    }
+
+    private fun resolvePayload(raw: String): TransferPayload {
+        // (a) 6-digit pickup code, typed on its own.
+        if (raw.matches(Regex("^\\d{6}$"))) {
+            return fetchByCode(raw)
+        }
+        // (b) Pasted share text that carries a pickup code: the code wins,
+        // because the newest metadata (and the file) live behind it.
+        if (BuildConfig.TRANSFER_API_BASE.isNotBlank()) {
+            extractPickupCode(raw)?.let { return fetchByCode(it) }
+        }
+        // (c) Pasted share text containing the encoded payload.
         PayloadCodec.extractFromText(raw)?.let { return it }
-        // (c) Bare download link.
+        // (d) Bare download link.
         if (raw.startsWith("https://") || raw.startsWith("http://")) {
             val url = raw.lines().first().trim()
             val guessedName = url.substringAfterLast('/').substringBefore('?')

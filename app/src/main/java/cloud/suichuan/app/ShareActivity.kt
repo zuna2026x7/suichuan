@@ -25,8 +25,15 @@ import kotlin.concurrent.thread
 
 /**
  * Packs the chosen app, uploads it, then shows the pickup code / QR / share
- * button. The file goes to Litterbox for 72h; the pickup code only exists
- * when the optional code worker has been deployed (TRANSFER_API_BASE set).
+ * button.
+ *
+ * Two upload routes:
+ *  - Backend configured (TRANSFER_API_BASE set): register a pickup code with
+ *    our own worker, then PUT the file to it (the file lives in our own R2
+ *    storage — no third-party host involved). Any failure offers a fallback
+ *    button that retries through the temporary hosting below.
+ *  - No backend: the file goes to Litterbox temporary hosting for 72h and the
+ *    receiver uses the QR code / shared text.
  */
 class ShareActivity : AppCompatActivity() {
 
@@ -37,6 +44,7 @@ class ShareActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var retryButton: Button
+    private lateinit var fallbackButton: Button
     private lateinit var resultLayout: LinearLayout
     private lateinit var codeText: TextView
     private lateinit var qrImage: ImageView
@@ -54,6 +62,7 @@ class ShareActivity : AppCompatActivity() {
         statusText = findViewById(R.id.text_status)
         progressBar = findViewById(R.id.progress_upload)
         retryButton = findViewById(R.id.button_retry)
+        fallbackButton = findViewById(R.id.button_fallback)
         resultLayout = findViewById(R.id.layout_result)
         codeText = findViewById(R.id.text_code)
         qrImage = findViewById(R.id.image_qr)
@@ -70,7 +79,8 @@ class ShareActivity : AppCompatActivity() {
         targetApp = app
         findViewById<TextView>(R.id.text_app_name).text = app.label
 
-        retryButton.setOnClickListener { startWork() }
+        retryButton.setOnClickListener { startWork(forceTemporary = false) }
+        fallbackButton.setOnClickListener { startWork(forceTemporary = true) }
         shareButton.setOnClickListener {
             if (shareText.isNotBlank()) {
                 val send = Intent(Intent.ACTION_SEND).apply {
@@ -85,14 +95,14 @@ class ShareActivity : AppCompatActivity() {
             AlertDialog.Builder(this)
                 .setTitle("现在用的是手机流量")
                 .setMessage("这个应用有 ${FormatUtil.size(app.sizeBytes)}，发送大约要用这么多流量。继续吗？")
-                .setPositiveButton("继续发送") { _, _ -> startWork() }
+                .setPositiveButton("继续发送") { _, _ -> startWork(forceTemporary = false) }
                 .setNegativeButton("先不发") { _, _ ->
                     statusText.text = "已取消。连上 Wi-Fi 后再来发，就不耗流量了。"
                     progressBar.visibility = View.GONE
                 }
                 .show()
         } else {
-            startWork()
+            startWork(forceTemporary = false)
         }
     }
 
@@ -129,70 +139,123 @@ class ShareActivity : AppCompatActivity() {
         return cellular && !wifi
     }
 
-    private fun startWork() {
+    private fun payloadFor(packedFile: PackedFile, downloadUrl: String): TransferPayload {
+        val app = targetApp!!
+        return TransferPayload(
+            appName = app.label,
+            packageName = app.packageName,
+            versionName = app.versionName,
+            sizeBytes = packedFile.sizeBytes,
+            sha256 = packedFile.sha256,
+            fileName = packedFile.fileName,
+            downloadUrl = downloadUrl
+        )
+    }
+
+    private fun reportProgress(written: Long, total: Long) {
+        if (total > 0) {
+            val percent = (written * 100 / total).toInt()
+            runOnUiThread { progressBar.progress = percent }
+        }
+    }
+
+    private fun startWork(forceTemporary: Boolean) {
         val app = targetApp ?: return
         if (working) return
         working = true
         retryButton.visibility = View.GONE
+        fallbackButton.visibility = View.GONE
         resultLayout.visibility = View.GONE
         progressBar.visibility = View.VISIBLE
         progressBar.isIndeterminate = true
         statusText.text = "正在打包「${app.label}」…"
 
+        val base = BuildConfig.TRANSFER_API_BASE
+        val useBackend = !forceTemporary && base.isNotBlank()
+
         thread {
+            val packedFile: PackedFile
             try {
-                val packedFile = packed ?: Packager.pack(app, cacheDir).also { packed = it }
-                runOnUiThread {
-                    progressBar.isIndeterminate = false
-                    progressBar.progress = 0
-                    statusText.text = "正在上传（${FormatUtil.size(packedFile.sizeBytes)}）…"
-                }
-                val url = LitterboxUploader.upload(packedFile.file) { written, total ->
-                    if (total > 0) {
-                        val percent = (written * 100 / total).toInt()
-                        runOnUiThread { progressBar.progress = percent }
-                    }
-                }
-                val payload = TransferPayload(
-                    appName = app.label,
-                    packageName = app.packageName,
-                    versionName = app.versionName,
-                    sizeBytes = packedFile.sizeBytes,
-                    sha256 = packedFile.sha256,
-                    fileName = packedFile.fileName,
-                    downloadUrl = url
-                )
-                var code: String? = null
-                val base = BuildConfig.TRANSFER_API_BASE
-                if (base.isNotBlank()) {
-                    code = try {
-                        BackendClient.register(base, payload)
-                    } catch (e: Exception) {
-                        null // Codes are a bonus; QR / share text still work.
-                    }
-                }
-                val text = PayloadCodec.shareText(payload, code)
-                runOnUiThread {
-                    working = false
-                    progressBar.visibility = View.GONE
-                    statusText.text = "上传完成！72 小时内有效，过期就没了，抓紧让对方接收。"
-                    resultLayout.visibility = View.VISIBLE
-                    codeText.text = code ?: "扫码接收"
-                    shareText = text
-                    try {
-                        qrImage.setImageBitmap(QrUtil.bitmapFor(text))
-                    } catch (e: Exception) {
-                        qrImage.setImageBitmap(null)
-                    }
-                }
+                packedFile = packed ?: Packager.pack(app, cacheDir).also { packed = it }
             } catch (e: Exception) {
-                runOnUiThread {
-                    working = false
-                    progressBar.visibility = View.GONE
-                    statusText.text = "没有发出去：${e.message ?: "网络出了点问题"}。检查一下网络，点重试再试一次。"
-                    retryButton.visibility = View.VISIBLE
-                }
+                showError(
+                    "打包没有完成：${e.message ?: "未知问题"}。点重试再试一次。",
+                    offerFallback = false
+                )
+                return@thread
             }
+            runOnUiThread {
+                progressBar.isIndeterminate = false
+                progressBar.progress = 0
+                statusText.text = "正在上传（${FormatUtil.size(packedFile.sizeBytes)}）…"
+            }
+            if (useBackend) {
+                uploadViaBackend(base, packedFile)
+            } else {
+                uploadViaTemporaryHosting(packedFile)
+            }
+        }
+    }
+
+    /** Backend route: pickup code + the file in our own storage. */
+    private fun uploadViaBackend(base: String, packedFile: PackedFile) {
+        try {
+            val meta = payloadFor(packedFile, downloadUrl = "")
+            val created = BackendClient.createTransfer(base, meta)
+            BackendClient.uploadFile(base, created.uploadToken, packedFile.file, ::reportProgress)
+            // From here on the file is addressed by its pickup code.
+            val payload = payloadFor(
+                packedFile,
+                downloadUrl = base.trimEnd('/') + "/f/" + created.code
+            )
+            showSuccess(payload, created.code)
+        } catch (e: Exception) {
+            showError(
+                "用取件服务发送失败了：${e.message ?: "网络出了点问题"}。" +
+                    "可以点「重试」，或者改用临时托管发送（对方扫二维码或粘贴分享文字接收）。",
+                offerFallback = true
+            )
+        }
+    }
+
+    /** Temporary-hosting route: Litterbox + QR / share text, no pickup code. */
+    private fun uploadViaTemporaryHosting(packedFile: PackedFile) {
+        try {
+            val url = LitterboxUploader.upload(packedFile.file, ::reportProgress)
+            val payload = payloadFor(packedFile, downloadUrl = url)
+            showSuccess(payload, pickupCode = null)
+        } catch (e: Exception) {
+            showError(
+                "没有发出去：${e.message ?: "网络出了点问题"}。检查一下网络，点重试再试一次。",
+                offerFallback = false
+            )
+        }
+    }
+
+    private fun showSuccess(payload: TransferPayload, pickupCode: String?) {
+        val text = PayloadCodec.shareText(payload, pickupCode)
+        runOnUiThread {
+            working = false
+            progressBar.visibility = View.GONE
+            statusText.text = "上传完成！72 小时内有效，过期就没了，抓紧让对方接收。"
+            resultLayout.visibility = View.VISIBLE
+            codeText.text = pickupCode ?: "扫码接收"
+            shareText = text
+            try {
+                qrImage.setImageBitmap(QrUtil.bitmapFor(text))
+            } catch (e: Exception) {
+                qrImage.setImageBitmap(null)
+            }
+        }
+    }
+
+    private fun showError(message: String, offerFallback: Boolean) {
+        runOnUiThread {
+            working = false
+            progressBar.visibility = View.GONE
+            statusText.text = message
+            retryButton.visibility = View.VISIBLE
+            fallbackButton.visibility = if (offerFallback) View.VISIBLE else View.GONE
         }
     }
 }

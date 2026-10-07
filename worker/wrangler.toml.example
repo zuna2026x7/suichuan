@@ -1,13 +1,25 @@
 # Copy this file to wrangler.toml and fill in your own values.
 #   cp wrangler.toml.example wrangler.toml
-# Create the KV namespace first and paste its id below:
+# Create the KV namespace and the R2 bucket first:
 #   npx wrangler kv namespace create TRANSFERS
+#   npx wrangler r2 bucket create suichuan-files
 
 name = "suichuan-pickup"
 main = "src/index.js"
 compatibility_date = "2024-09-23"
 workers_dev = true
 
+# Transfer records: metadata + tokens under each 6-digit pickup code.
 [[kv_namespaces]]
 binding = "TRANSFERS"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+# The package files themselves: files/<pickup code>, uploaded and downloaded
+# through the Worker.
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "suichuan-files"
+
+# Hourly cleanup of R2 objects whose KV record has expired.
+[triggers]
+crons = ["0 * * * *"]

@@ -92,10 +92,17 @@ object PayloadCodec {
         val sb = StringBuilder()
         sb.append("随传：我用「随传」给你发了一个应用「").append(payload.appName).append("」。\n")
         if (!pickupCode.isNullOrBlank()) {
+            // The code comes first and prominently: the receiver can type it,
+            // or paste this whole message and the app finds the code in it.
             sb.append("取件码：").append(pickupCode).append("\n")
+            sb.append("打开「随传」输入这个取件码就能接收；也可以把这整段文字粘贴到随传里。\n")
         }
-        sb.append("在随传里粘贴这整段文字就能接收；也可以直接打开下载链接：\n")
-        sb.append(payload.downloadUrl).append('\n')
+        if (payload.downloadUrl.isNotBlank()) {
+            sb.append("在随传里粘贴这整段文字就能接收；也可以直接打开下载链接：\n")
+            sb.append(payload.downloadUrl).append('\n')
+        } else if (pickupCode.isNullOrBlank()) {
+            sb.append("在随传里粘贴这整段文字就能接收。\n")
+        }
         sb.append(encode(payload))
         return sb.toString()
     }
