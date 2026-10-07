@@ -81,6 +81,11 @@
                 android:id="@+id/button_share"
                 style="@style/Suichuan.BigButton"
                 android:text="发给微信 / QQ 好友" />
+
+            <Button
+                android:id="@+id/button_done"
+                style="@style/Suichuan.BigButton"
+                android:text="完成，返回首页" />
         </LinearLayout>
     </LinearLayout>
 </ScrollView>

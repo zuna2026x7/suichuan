@@ -83,6 +83,16 @@ class ShareActivity : AppCompatActivity() {
 
         retryButton.setOnClickListener { startWork(forceTemporary = false) }
         fallbackButton.setOnClickListener { startWork(forceTemporary = true) }
+        findViewById<Button>(R.id.button_done).setOnClickListener {
+            // Success is a dead end on phones without a visible back button
+            // (gesture navigation): give an explicit way home, clearing the
+            // send flow off the stack so Back from home exits the app.
+            val home = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            startActivity(home)
+            finish()
+        }
         shareButton.setOnClickListener {
             if (shareText.isNotBlank()) {
                 val send = Intent(Intent.ACTION_SEND).apply {
