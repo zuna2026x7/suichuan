@@ -19,7 +19,7 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Suichuan"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
