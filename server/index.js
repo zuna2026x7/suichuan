@@ -425,6 +425,55 @@ async function streamFile(res, file, start, end) {
   }
 }
 
+// One line per completed /t or /f request, so a failed transfer can be
+// diagnosed afterwards from the journal (systemd captures stdout). The
+// path is logged with the pickup code only: upload/delete tokens are
+// never written out — PUT /f/<token> is logged as the literal "/f/:token",
+// and query strings (which may carry a delete token) are never logged.
+function logRequestOnFinish(req, res, logPath, startedAt) {
+  // The response's Content-Length is captured as it goes through
+  // writeHead: by "finish" time Node has already discarded its header
+  // store, so getHeader() can no longer see it. The wrapper is a pure
+  // pass-through and changes nothing about the response itself.
+  let responseBytes;
+  const writeHead = res.writeHead;
+  res.writeHead = function (statusCode, ...rest) {
+    for (const arg of rest) {
+      if (Array.isArray(arg)) {
+        for (let i = 0; i + 1 < arg.length; i += 2) {
+          if (String(arg[i]).toLowerCase() === "content-length") {
+            responseBytes = arg[i + 1];
+          }
+        }
+      } else if (arg && typeof arg === "object") {
+        for (const key of Object.keys(arg)) {
+          if (key.toLowerCase() === "content-length") {
+            responseBytes = arg[key];
+          }
+        }
+      }
+    }
+    return writeHead.call(this, statusCode, ...rest);
+  };
+  res.on("finish", () => {
+    const range = req.headers.range;
+    console.log(
+      new Date().toISOString() +
+        " " +
+        req.method +
+        " " +
+        logPath +
+        " " +
+        res.statusCode +
+        " bytes=" +
+        (responseBytes === undefined ? "-" : responseBytes) +
+        " ms=" +
+        (Date.now() - startedAt) +
+        (range ? " range=" + range : "")
+    );
+  });
+}
+
 // ----- Request handlers -----
 
 async function handleCreate(req, res) {
@@ -735,6 +784,19 @@ async function handle(req, res) {
 
   const url = new URL(req.url, "http://localhost");
   const parts = url.pathname.split("/").filter((p) => p.length > 0);
+
+  // Request logging for the transfer routes (see logRequestOnFinish).
+  // Installed before dispatch so every /t and /f response is accounted
+  // for; the path is rebuilt from the segments, never taken from the
+  // raw URL, so no token can leak into the log.
+  if (parts[0] === "t" || parts[0] === "f") {
+    let logPath = "/" + parts[0];
+    if (parts.length >= 2) {
+      logPath +=
+        "/" + (req.method === "PUT" && parts[0] === "f" ? ":token" : parts[1]);
+    }
+    logRequestOnFinish(req, res, logPath, Date.now());
+  }
 
   // POST /t — register a transfer's metadata, get code + tokens.
   if (req.method === "POST" && parts.length === 1 && parts[0] === "t") {

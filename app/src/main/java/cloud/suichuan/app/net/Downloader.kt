@@ -18,6 +18,12 @@ object Downloader {
     private const val PARALLEL_THRESHOLD_BYTES = 1024L * 1024L // 1 MiB
     private const val SEGMENT_COUNT = 6
 
+    /** Attempts per segment before the segment (and the download) gives up. */
+    private const val MAX_SEGMENT_ATTEMPTS = 4
+
+    /** Backoff between segment attempts: this many ms × the failed attempt's number. */
+    private const val RETRY_BASE_DELAY_MS = 800L
+
     fun download(url: String, target: File, onProgress: (written: Long, total: Long) -> Unit): File {
         // A single connection to an overseas server is often throttled per
         // stream on the receiver's network, so big files are fetched as
@@ -157,7 +163,21 @@ object Downloader {
         return target
     }
 
-    /** Downloads one byte range into the shared file at its offset. */
+    /**
+     * Downloads one byte range into the shared file at its offset.
+     *
+     * A dead connection must not doom the whole download (one segment of a
+     * big file on consumer Wi-Fi can mean tens of MB in flight), so each
+     * segment retries up to [MAX_SEGMENT_ATTEMPTS] times. [written] — the
+     * bytes of THIS segment already on disk — is the single counter that
+     * drives everything: a retry asks only for the remaining sub-range
+     * (bytes=start+written-end) and keeps writing at that offset, so bytes
+     * already written are never re-downloaded, and because [onBytes] is
+     * called with exactly the chunk just written, at the same moment
+     * [written] grows by it, progress accounting can't double-count either.
+     * Only when every attempt fails does the segment throw, which fails
+     * the whole download as before.
+     */
     private fun downloadSegment(
         url: String,
         target: File,
@@ -167,35 +187,70 @@ object Downloader {
         onBytes: (read: Int) -> Unit
     ) {
         val expected = end - start + 1
-        val request = Request.Builder().url(url)
-            .header("Range", "bytes=$start-$end")
-            .get()
-            .build()
-        val call = HttpClients.instance.newCall(request)
-        calls.add(call)
-        call.execute().use { response ->
-            if (response.code != 206) {
-                throw IOException("下载失败（${response.code}）。链接可能已经过期，让对方重新发送。")
-            }
-            val body = response.body ?: throw IOException("下载失败：服务器没有返回内容。")
-            // Own handle per thread: seeks on a shared handle would race.
-            RandomAccessFile(target, "rw").use { raf ->
-                raf.seek(start)
-                body.byteStream().use { input ->
-                    val buffer = ByteArray(64 * 1024)
-                    var written = 0L
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read <= 0) break
-                        raf.write(buffer, 0, read)
-                        written += read
-                        onBytes(read)
-                    }
-                    if (written != expected) {
-                        throw IOException("下载不完整，有一段数据没下完。网络可能不稳定，重新接收一次。")
-                    }
+        var written = 0L
+        var lastError: IOException? = null
+        for (attempt in 1..MAX_SEGMENT_ATTEMPTS) {
+            if (written == expected) return
+            if (attempt > 1) {
+                // Brief backoff before resuming: 800ms after the first
+                // failure, 1600ms after the second, and so on.
+                try {
+                    Thread.sleep(RETRY_BASE_DELAY_MS * (attempt - 1))
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw lastError ?: IOException("下载被中断了。")
                 }
             }
+            val request = Request.Builder().url(url)
+                .header("Range", "bytes=${start + written}-$end")
+                .get()
+                .build()
+            val call = HttpClients.instance.newCall(request)
+            calls.add(call)
+            try {
+                call.execute().use { response ->
+                    // A resumed range answered with 200 (server ignored the
+                    // Range header) would land at the wrong offset: count it
+                    // as a failed attempt and write nothing.
+                    if (response.code != 206) {
+                        throw IOException("下载失败（${response.code}）。链接可能已经过期，让对方重新发送。")
+                    }
+                    val body = response.body ?: throw IOException("下载失败：服务器没有返回内容。")
+                    // Own handle per thread: seeks on a shared handle would race.
+                    RandomAccessFile(target, "rw").use { raf ->
+                        raf.seek(start + written)
+                        body.byteStream().use { input ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read <= 0) break
+                                if (written + read > expected) {
+                                    // More bytes than the range asked for:
+                                    // offsets can no longer be trusted.
+                                    throw IOException("下载失败：服务器返回的数据长度不对。")
+                                }
+                                raf.write(buffer, 0, read)
+                                written += read
+                                onBytes(read)
+                            }
+                        }
+                    }
+                }
+            } catch (e: IOException) {
+                // Includes mid-stream disconnects: whatever was written
+                // stays on disk and the next attempt resumes after it.
+                lastError = e
+                continue
+            }
+            // The stream ended without an error but short of the full
+            // segment (connection closed early): resume the rest.
+            if (written < expected) {
+                lastError = IOException("下载不完整，有一段数据没下完。网络可能不稳定，重新接收一次。")
+            }
+        }
+        if (written != expected) {
+            throw lastError
+                ?: IOException("下载不完整，有一段数据没下完。网络可能不稳定，重新接收一次。")
         }
     }
 }
