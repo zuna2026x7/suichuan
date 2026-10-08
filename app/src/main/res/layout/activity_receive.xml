@@ -100,5 +100,34 @@
                 style="@style/Suichuan.BigButton"
                 android:text="安装" />
         </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/layout_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="收到一段文字"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/text_received_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textIsSelectable="true"
+                android:textSize="16sp" />
+
+            <Button
+                android:id="@+id/button_copy_text"
+                style="@style/Suichuan.BigButton"
+                android:text="复制全文" />
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

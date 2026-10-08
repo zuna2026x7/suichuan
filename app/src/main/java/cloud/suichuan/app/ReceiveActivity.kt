@@ -1,6 +1,7 @@
 package cloud.suichuan.app
 
 import android.Manifest
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -35,6 +36,10 @@ import kotlin.concurrent.thread
  * scan. However the content arrives, it funnels into [processInput]. The
  * file lands in our private cache — the user never sees a file name, so
  * nothing can be renamed into something uninstallable.
+ *
+ * A code can also resolve to a TEXT transfer: the message arrives inside
+ * the metadata, so instead of downloading anything we show the text card
+ * (selectable text + a copy button) and stop there.
  */
 class ReceiveActivity : AppCompatActivity() {
 
@@ -45,7 +50,10 @@ class ReceiveActivity : AppCompatActivity() {
     private lateinit var confirmName: TextView
     private lateinit var confirmDetail: TextView
     private lateinit var uploadLogButton: Button
+    private lateinit var textLayout: LinearLayout
+    private lateinit var receivedTextView: TextView
 
+    private var receivedTextContent: String = ""
     private var downloadedFile: File? = null
     private var downloadedKind: ApkInspector.Kind = ApkInspector.Kind.INVALID
     private var busy = false
@@ -82,6 +90,15 @@ class ReceiveActivity : AppCompatActivity() {
         confirmDetail = findViewById(R.id.text_confirm_detail)
         uploadLogButton = findViewById(R.id.button_upload_log)
         uploadLogButton.setOnClickListener { LogUploader.uploadFrom(this) }
+        textLayout = findViewById(R.id.layout_text)
+        receivedTextView = findViewById(R.id.text_received_text)
+        findViewById<Button>(R.id.button_copy_text).setOnClickListener {
+            val content = receivedTextContent
+            if (content.isEmpty()) return@setOnClickListener
+            getSystemService(ClipboardManager::class.java)
+                ?.setPrimaryClip(ClipData.newPlainText("随传收到的文字", content))
+            Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
+        }
 
         findViewById<Button>(R.id.button_fetch).setOnClickListener {
             processInput(inputEdit.text.toString())
@@ -153,6 +170,7 @@ class ReceiveActivity : AppCompatActivity() {
         if (busy) return
         busy = true
         confirmLayout.visibility = View.GONE
+        textLayout.visibility = View.GONE
         uploadLogButton.visibility = View.GONE
         progressBar.visibility = View.VISIBLE
         progressBar.isIndeterminate = true
@@ -160,7 +178,19 @@ class ReceiveActivity : AppCompatActivity() {
 
         thread {
             try {
-                val payload = resolvePayload(raw)
+                val resolved = resolvePayload(raw)
+                if (resolved.kind == "text") {
+                    // A text transfer carries its message in the metadata:
+                    // there is no file to download or install — just show it.
+                    val message = resolved.text.orEmpty()
+                    AppLog.log(
+                        "RECV",
+                        "收到文字取件：长度=${message.toByteArray(Charsets.UTF_8).size} 字节"
+                    )
+                    runOnUiThread { showTextTransfer(message) }
+                    return@thread
+                }
+                val payload = resolved.payload
                 AppLog.log(
                     "RECV",
                     "已解析：应用=${payload.appName} 包名=${payload.packageName} " +
@@ -222,8 +252,19 @@ class ReceiveActivity : AppCompatActivity() {
         }
     }
 
+    /** Shows a received text transfer: the message plus a copy button. */
+    private fun showTextTransfer(message: String) {
+        busy = false
+        progressBar.visibility = View.GONE
+        confirmLayout.visibility = View.GONE
+        receivedTextContent = message
+        receivedTextView.text = message
+        textLayout.visibility = View.VISIBLE
+        statusText.text = "收到一段文字。可以长按选中一部分，或者点「复制全文」整段复制。"
+    }
+
     /** Fetches a transfer by code from our backend, checking it is ready. */
-    private fun fetchByCode(code: String): TransferPayload {
+    private fun fetchByCode(code: String): BackendClient.FetchedTransfer {
         val base = BuildConfig.TRANSFER_API_BASE
         if (base.isBlank()) {
             throw IllegalStateException("这个版本还没有配置取件码服务。请让对方把分享的整段文字发给你，粘贴到这里接收。")
@@ -231,12 +272,13 @@ class ReceiveActivity : AppCompatActivity() {
         val fetched = BackendClient.fetchTransfer(base, code)
         AppLog.log(
             "RECV",
-            "取件码 $code：ready=${fetched.ready} 应用=${fetched.payload.appName} size=${fetched.payload.sizeBytes}"
+            "取件码 $code：ready=${fetched.ready} kind=${fetched.kind ?: "file"} " +
+                "应用=${fetched.payload.appName} size=${fetched.payload.sizeBytes}"
         )
         if (!fetched.ready) {
             throw IllegalStateException("对方还没上传完，请稍后再试。等对方那边显示上传完成后，再回来点开始接收。")
         }
-        return fetched.payload
+        return fetched
     }
 
     /** Finds a "取件码：123456" (or a lone 6-digit line) inside pasted text. */
@@ -247,8 +289,9 @@ class ReceiveActivity : AppCompatActivity() {
             .firstOrNull { it.matches(Regex("^\\d{6}$")) }
     }
 
-    private fun resolvePayload(raw: String): TransferPayload {
-        // (a) 6-digit pickup code, typed on its own.
+    private fun resolvePayload(raw: String): BackendClient.FetchedTransfer {
+        // (a) 6-digit pickup code, typed on its own. (A scanned text-transfer
+        // QR lands here too: it encodes the bare code string.)
         if (raw.matches(Regex("^\\d{6}$"))) {
             return fetchByCode(raw)
         }
@@ -258,19 +301,24 @@ class ReceiveActivity : AppCompatActivity() {
             extractPickupCode(raw)?.let { return fetchByCode(it) }
         }
         // (c) Pasted share text containing the encoded payload.
-        PayloadCodec.extractFromText(raw)?.let { return it }
+        PayloadCodec.extractFromText(raw)?.let {
+            return BackendClient.FetchedTransfer(it, ready = true)
+        }
         // (d) Bare download link.
         if (raw.startsWith("https://") || raw.startsWith("http://")) {
             val url = raw.lines().first().trim()
             val guessedName = url.substringAfterLast('/').substringBefore('?')
-            return TransferPayload(
-                appName = "",
-                packageName = "",
-                versionName = "",
-                sizeBytes = 0L,
-                sha256 = "",
-                fileName = guessedName.ifBlank { "package.bin" },
-                downloadUrl = url
+            return BackendClient.FetchedTransfer(
+                TransferPayload(
+                    appName = "",
+                    packageName = "",
+                    versionName = "",
+                    sizeBytes = 0L,
+                    sha256 = "",
+                    fileName = guessedName.ifBlank { "package.bin" },
+                    downloadUrl = url
+                ),
+                ready = true
             )
         }
         throw IllegalStateException("这段内容看不懂。请粘贴对方分享的整段文字、取件码或下载链接。")

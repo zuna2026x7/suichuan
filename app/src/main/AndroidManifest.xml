@@ -36,6 +36,11 @@
             android:label="发送应用" />
 
         <activity
+            android:name=".SendTextActivity"
+            android:exported="false"
+            android:label="发一段文字" />
+
+        <activity
             android:name=".ShareActivity"
             android:exported="false"
             android:label="生成取件码" />

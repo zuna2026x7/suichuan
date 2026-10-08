@@ -5,8 +5,9 @@
 // Spawns the real server on a random port with a temp data dir and drives
 // it over HTTP: full flow, a >10MB round trip, Range cases, oversize
 // rollback (with and without Content-Length), a declared-oversize
-// create rejected up front, POST /log storage + its 413 cap,
-// delete-token checks,
+// create rejected up front, POST /log storage + its 413 cap, text
+// transfers (exact round-trip, born ready, PUT -> 409, 64KiB cap,
+// empty -> 400), delete-token checks,
 // persistence across a restart, expiry after a restart, and finally a
 // natural TTL expiry (ttlSeconds=1 clamps to the 60s minimum — the wait
 // at the end is real, mirroring the worker's KV TTL floor).
@@ -309,6 +310,126 @@ try {
     );
   }
 
+  // ----- Text transfers: the message itself is the payload -----
+  {
+    const sampleText = "你好，随传！📱 这是一条测试文字。\n第二行也在这里。";
+    const res = await fetch(base + "/t", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: "text",
+        text: sampleText,
+        ttlSeconds: 259200,
+      }),
+    });
+    eq("POST /t text status", res.status, 200);
+    const textCreated = await res.json();
+    check(
+      "text code is 6 digits",
+      /^\d{6}$/.test(textCreated.code),
+      textCreated.code
+    );
+    check(
+      "text create returns an uploadToken",
+      /^[0-9a-f]{48}$/.test(textCreated.uploadToken),
+      textCreated.uploadToken
+    );
+    eq("text ttlSeconds echoed", textCreated.ttlSeconds, 259200);
+
+    const metaRes = await fetch(base + "/t/" + textCreated.code);
+    const view = await metaRes.json();
+    eq("GET /t text status", metaRes.status, 200);
+    eq("text record is ready at creation", view.ready, true);
+    eq("text kind in view", view.kind, "text");
+    eq("text round-trips exactly", view.text, sampleText);
+    eq("text appName defaults", view.appName, "文字消息");
+    eq(
+      "text sizeBytes is the UTF-8 byte length",
+      view.sizeBytes,
+      Buffer.byteLength(sampleText, "utf8")
+    );
+    eq("text view leaks no deleteToken", view.deleteToken, undefined);
+    eq("text view leaks no uploadToken", view.uploadToken, undefined);
+
+    // Nothing is left to upload: the token was born spent, so a PUT
+    // against it gets the already-uploaded answer, not a 404.
+    const put = await fetch(base + "/f/" + textCreated.uploadToken, {
+      method: "PUT",
+      body: Buffer.from("nope"),
+    });
+    eq("PUT to a text transfer -> 409", put.status, 409);
+    eq(
+      "PUT to a text transfer message",
+      (await put.json()).error,
+      "这个文件已经上传过了。"
+    );
+
+    // Exactly at the 64 KiB cap is fine.
+    const atCap = await fetch(base + "/t", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "text", text: "a".repeat(65536) }),
+    });
+    eq("text of exactly 65536 bytes -> 200", atCap.status, 200);
+    const atCapBody = await atCap.json();
+    const atCapMeta = await fetch(base + "/t/" + atCapBody.code);
+    eq(
+      "at-cap text sizeBytes",
+      (await atCapMeta.json()).sizeBytes,
+      65536
+    );
+    const delCap = await fetch(base + "/t/" + atCapBody.code, {
+      method: "DELETE",
+      headers: { "x-delete-token": atCapBody.deleteToken },
+    });
+    eq("at-cap text cleanup DELETE", delCap.status, 200);
+    await delCap.text();
+
+    // One byte over the cap -> 413, and no code is issued.
+    const over = await fetch(base + "/t", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "text", text: "a".repeat(65537) }),
+    });
+    eq("text of 65537 bytes -> 413", over.status, 413);
+    eq(
+      "oversize text message",
+      (await over.json()).error,
+      "文字太长了：一段文字最多 64KB。"
+    );
+
+    // Empty, whitespace-only and missing text -> 400.
+    for (const bad of [
+      { kind: "text", text: "" },
+      { kind: "text", text: "   \n " },
+      { kind: "text" },
+      { kind: "text", text: 42 },
+    ]) {
+      const r = await fetch(base + "/t", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(bad),
+      });
+      eq("empty/missing text -> 400", r.status, 400);
+      eq(
+        "empty text message",
+        (await r.json()).error,
+        "文字内容是空的，没法生成取件码。"
+      );
+    }
+
+    // DELETE removes a text transfer like any other.
+    const del = await fetch(base + "/t/" + textCreated.code, {
+      method: "DELETE",
+      headers: { "x-delete-token": textCreated.deleteToken },
+    });
+    eq("text DELETE status", del.status, 200);
+    eq("text DELETE ok", (await del.json()).ok, true);
+    const gone = await fetch(base + "/t/" + textCreated.code);
+    eq("GET /t text after DELETE -> 404", gone.status, 404);
+    await gone.text();
+  }
+
   // ----- Full flow, small patterned payload (app sends strings) -----
   const small = patterned(4096);
   const { res: createRes, body: created } = await createTransfer(base, {
@@ -338,6 +459,8 @@ try {
     eq("meta sizeBytes is a number", body.sizeBytes, small.length);
     eq("no deleteToken leak", body.deleteToken, undefined);
     eq("no uploadToken leak", body.uploadToken, undefined);
+    eq("no kind on a file record", body.kind, undefined);
+    eq("no text on a file record", body.text, undefined);
   }
   {
     const res = await fetch(base + "/t/12345");

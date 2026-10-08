@@ -25,6 +25,13 @@
 //                           verbatim under logs/, no auth — the log
 //                           contains no tokens by construction
 //
+// POST /t also accepts { kind: "text", text }: a text message instead of
+// an app. The record stores the text itself and is ready the moment it is
+// created — no PUT follows (the issued upload token is born spent, so a
+// PUT against it gets the usual already-uploaded 409). GET /t returns
+// kind:"text" plus the full text for these records only; file records
+// keep the exact view they have always had.
+//
 // Expiry mirrors the worker's KV TTL: a record dies ttlSeconds after
 // creation; a successful upload re-arms it for its remaining TTL (floored
 // at 60s, exactly like the worker's remainingTtlSeconds). Expired records
@@ -89,6 +96,9 @@ const LOGS_DIR = path.join(DATA_DIR, "logs");
 // file cap; anything bigger is not a log anymore.
 const LOG_MAX_BYTES = 1024 * 1024; // 1 MiB
 
+// One text transfer carries at most 64 KiB of UTF-8 text.
+const TEXT_MAX_BYTES = 64 * 1024;
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -144,8 +154,10 @@ function clampTtl(payload) {
 }
 
 // What a receiver may see: metadata + ready flag. Never the tokens.
+// Text transfers additionally expose their kind and the message itself —
+// the text IS the payload. File transfers never gain either field.
 function publicView(record) {
-  return {
+  const view = {
     appName: record.appName,
     packageName: record.packageName,
     versionName: record.versionName,
@@ -154,6 +166,11 @@ function publicView(record) {
     fileName: record.fileName,
     ready: record.uploaded === true,
   };
+  if (record.kind === "text") {
+    view.kind = "text";
+    view.text = record.text;
+  }
+  return view;
 }
 
 // Make a stored fileName safe for a Content-Disposition header value.
@@ -498,22 +515,59 @@ async function handleCreate(req, res) {
   } catch (e) {
     return sendJson(res, 400, { error: "请求内容不是有效的 JSON。" });
   }
-  if (
-    !payload ||
-    typeof payload.fileName !== "string" ||
-    payload.fileName.length === 0
-  ) {
-    return sendJson(res, 400, { error: "缺少 fileName，没法生成取件码。" });
-  }
+  // Text transfers (kind:"text") carry their whole payload in this one
+  // request: the record stores the text and is ready at creation. File
+  // transfers keep the validation they have always had.
+  const isText =
+    payload !== null &&
+    typeof payload === "object" &&
+    payload.kind === "text";
+  let meta;
+  let extra = {};
+  if (isText) {
+    const text = payload.text;
+    if (typeof text !== "string" || text.trim().length === 0) {
+      return sendJson(res, 400, {
+        error: "文字内容是空的，没法生成取件码。",
+      });
+    }
+    const textBytes = Buffer.byteLength(text, "utf8");
+    if (textBytes > TEXT_MAX_BYTES) {
+      return sendJson(res, 413, {
+        error: "文字太长了：一段文字最多 64KB。",
+      });
+    }
+    meta = {
+      appName:
+        typeof payload.appName === "string" &&
+        payload.appName.trim().length > 0
+          ? payload.appName
+          : "文字消息",
+      packageName: "",
+      versionName: "",
+      sizeBytes: textBytes,
+      sha256: "",
+      fileName: "",
+    };
+    extra = { kind: "text", text };
+  } else {
+    if (
+      !payload ||
+      typeof payload.fileName !== "string" ||
+      payload.fileName.length === 0
+    ) {
+      return sendJson(res, 400, { error: "缺少 fileName，没法生成取件码。" });
+    }
 
-  // Fail fast: a declared size over the cap can never upload successfully
-  // (the PUT stream would be torn down mid-transfer), so refuse here,
-  // before any record exists.
-  const meta = pickMeta(payload);
-  if (meta.sizeBytes > MAX_BYTES) {
-    return sendJson(res, 413, {
-      error: `文件太大了：单个应用最大支持 ${formatLimit(MAX_BYTES)}。`,
-    });
+    // Fail fast: a declared size over the cap can never upload successfully
+    // (the PUT stream would be torn down mid-transfer), so refuse here,
+    // before any record exists.
+    meta = pickMeta(payload);
+    if (meta.sizeBytes > MAX_BYTES) {
+      return sendJson(res, 413, {
+        error: `文件太大了：单个应用最大支持 ${formatLimit(MAX_BYTES)}。`,
+      });
+    }
   }
 
   const ttlSeconds = clampTtl(payload);
@@ -521,9 +575,13 @@ async function handleCreate(req, res) {
   const uploadToken = randomToken();
   const record = {
     ...meta,
+    ...extra,
     deleteToken,
     uploadToken,
-    uploaded: false,
+    // A text record already holds its content, so it is born uploaded:
+    // GET /t reports ready, and a PUT against its token hits the
+    // already-uploaded 409 in handleUpload.
+    uploaded: isText,
     createdAt: Date.now(),
     ttlSeconds, // internal: lets PUT recompute the remaining TTL
   };

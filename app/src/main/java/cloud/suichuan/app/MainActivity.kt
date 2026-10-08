@@ -7,7 +7,7 @@ import androidx.appcompat.app.AppCompatActivity
 import cloud.suichuan.app.net.LogUploader
 import cloud.suichuan.app.util.AppLog
 
-/** Home screen: three big entries — send, receive, rescue. */
+/** Home screen: four big entries — send an app, send text, receive, rescue. */
 class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -17,6 +17,9 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.button_send).setOnClickListener {
             startActivity(Intent(this, SendActivity::class.java))
+        }
+        findViewById<Button>(R.id.button_send_text).setOnClickListener {
+            startActivity(Intent(this, SendTextActivity::class.java))
         }
         findViewById<Button>(R.id.button_receive).setOnClickListener {
             startActivity(Intent(this, ReceiveActivity::class.java))

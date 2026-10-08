@@ -26,6 +26,11 @@
             android:text="发送应用" />
 
         <Button
+            android:id="@+id/button_send_text"
+            style="@style/Suichuan.BigButton"
+            android:text="发一段文字" />
+
+        <Button
             android:id="@+id/button_receive"
             style="@style/Suichuan.BigButton"
             android:text="输入取件码" />
