@@ -18,7 +18,7 @@
 
         <TextView
             style="@style/Suichuan.HintText"
-            android:text="扫一扫对方的二维码，或者输入对方给你的取件码，也可以把对方分享的整段文字、下载链接粘贴到这里。" />
+            android:text="扫码或粘贴只会把内容填到输入框，不会自动开始。检查一下，再点下面的“开始接收”。也可以直接输入取件码 / 分享文字 / 下载链接。" />
 
         <Button
             android:id="@+id/button_scan"
@@ -99,6 +99,11 @@
                 android:id="@+id/button_install"
                 style="@style/Suichuan.BigButton"
                 android:text="安装" />
+
+            <Button
+                android:id="@+id/button_done"
+                style="@style/Suichuan.BigButton"
+                android:text="完成，返回首页" />
         </LinearLayout>
 
         <LinearLayout
@@ -128,6 +133,11 @@
                 android:id="@+id/button_copy_text"
                 style="@style/Suichuan.BigButton"
                 android:text="复制全文" />
+
+            <Button
+                android:id="@+id/button_done_text"
+                style="@style/Suichuan.BigButton"
+                android:text="完成，返回首页" />
         </LinearLayout>
     </LinearLayout>
 </ScrollView>

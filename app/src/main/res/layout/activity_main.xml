@@ -20,6 +20,14 @@
             style="@style/Suichuan.HintText"
             android:text="把这台手机上的应用，通过网络传到另一台手机。不用连同一个 Wi-Fi，也不用改文件名。" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="发送"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
         <Button
             android:id="@+id/button_send"
             style="@style/Suichuan.BigButton"
@@ -30,10 +38,18 @@
             style="@style/Suichuan.BigButton"
             android:text="发一段文字" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="接收"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
         <Button
             android:id="@+id/button_receive"
             style="@style/Suichuan.BigButton"
-            android:text="输入取件码" />
+            android:text="接收应用 / 文字" />
 
         <Button
             android:id="@+id/button_rescue"
@@ -42,7 +58,7 @@
 
         <TextView
             style="@style/Suichuan.HintText"
-            android:text="QQ、微信收到的安装包经常打不开（名字被改了），用第三个入口选它就能直接安装，不用去文件管理器改名。" />
+            android:text="QQ、微信收到的安装包经常打不开（名字被改了），点下面这个入口选它就能直接安装，不用去文件管理器改名。" />
 
         <Button
             android:id="@+id/button_upload_log"

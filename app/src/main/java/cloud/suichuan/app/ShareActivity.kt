@@ -1,6 +1,5 @@
 package cloud.suichuan.app
 
-import android.app.AlertDialog
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -48,6 +47,9 @@ class ShareActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
     private lateinit var progressBar: ProgressBar
+    private lateinit var confirmLayout: LinearLayout
+    private lateinit var confirmDetail: TextView
+    private lateinit var cancelUploadButton: Button
     private lateinit var retryButton: Button
     private lateinit var fallbackButton: Button
     private lateinit var uploadLogButton: Button
@@ -62,6 +64,10 @@ class ShareActivity : AppCompatActivity() {
     private var shareText: String = ""
     private var working = false
 
+    /** Set by the Cancel button; the worker thread checks it before each step. */
+    @Volatile
+    private var cancelled = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppLog.init(this)
@@ -69,6 +75,21 @@ class ShareActivity : AppCompatActivity() {
 
         statusText = findViewById(R.id.text_status)
         progressBar = findViewById(R.id.progress_upload)
+        confirmLayout = findViewById(R.id.layout_confirm)
+        confirmDetail = findViewById(R.id.text_confirm_detail)
+        cancelUploadButton = findViewById(R.id.button_cancel_upload)
+        cancelUploadButton.setOnClickListener {
+            // Stop the worker thread from continuing, then leave.
+            cancelled = true
+            working = false
+            finish()
+        }
+        findViewById<Button>(R.id.button_start_send).setOnClickListener {
+            startWork(forceTemporary = false)
+        }
+        findViewById<Button>(R.id.button_cancel_confirm).setOnClickListener {
+            finish()
+        }
         retryButton = findViewById(R.id.button_retry)
         fallbackButton = findViewById(R.id.button_fallback)
         uploadLogButton = findViewById(R.id.button_upload_log)
@@ -112,19 +133,23 @@ class ShareActivity : AppCompatActivity() {
             }
         }
 
+        // Confirm first: show what is about to be sent (name / size /
+        // traffic) and only start packing + uploading on "开始发送".
+        // The old cellular dialog is folded into this confirm text.
+        val confirmLines = mutableListOf(
+            "要发送：${app.label}",
+            "大小：${FormatUtil.size(app.sizeBytes)}"
+        )
+        if (app.versionName.isNotBlank()) confirmLines.add("版本：${app.versionName}")
         if (isOnCellular()) {
-            AlertDialog.Builder(this)
-                .setTitle("现在用的是手机流量")
-                .setMessage("这个应用有 ${FormatUtil.size(app.sizeBytes)}，发送大约要用这么多流量。继续吗？")
-                .setPositiveButton("继续发送") { _, _ -> startWork(forceTemporary = false) }
-                .setNegativeButton("先不发") { _, _ ->
-                    statusText.text = "已取消。连上 Wi-Fi 后再来发，就不耗流量了。"
-                    progressBar.visibility = View.GONE
-                }
-                .show()
+            confirmLines.add("现在用的是手机流量，发送大约要用这么多流量。")
         } else {
-            startWork(forceTemporary = false)
+            confirmLines.add("发送大约要用这么多流量（建议在 Wi-Fi 下发送）。")
         }
+        confirmDetail.text = confirmLines.joinToString("\n")
+        confirmLayout.visibility = View.VISIBLE
+        progressBar.visibility = View.GONE
+        statusText.text = "确认一下，再开始发送。"
     }
 
     private fun loadApp(packageName: String): InstalledApp? {
@@ -184,11 +209,14 @@ class ShareActivity : AppCompatActivity() {
         val app = targetApp ?: return
         if (working) return
         working = true
+        cancelled = false
+        confirmLayout.visibility = View.GONE
         retryButton.visibility = View.GONE
         fallbackButton.visibility = View.GONE
         uploadLogButton.visibility = View.GONE
         resultLayout.visibility = View.GONE
         progressBar.visibility = View.VISIBLE
+        cancelUploadButton.visibility = View.VISIBLE
         progressBar.isIndeterminate = true
         statusText.text = "正在打包「${app.label}」…"
 
@@ -198,6 +226,7 @@ class ShareActivity : AppCompatActivity() {
         thread {
             val packedFile: PackedFile
             try {
+                if (cancelled) return@thread
                 packedFile = packed ?: Packager.pack(app, cacheDir).also { packed = it }
             } catch (e: Exception) {
                 AppLog.log("SEND", "打包失败 应用=${app.label} 包名=${app.packageName}", e)
@@ -211,6 +240,7 @@ class ShareActivity : AppCompatActivity() {
                 "SEND",
                 "打包完成 应用=${app.label} 包名=${app.packageName} size=${packedFile.sizeBytes} file=${packedFile.fileName}"
             )
+            if (cancelled) return@thread
             // Fail fast, before either upload route starts: an oversize
             // package would only die partway through the upload.
             if (packedFile.sizeBytes > MAX_SEND_BYTES) {
@@ -221,6 +251,7 @@ class ShareActivity : AppCompatActivity() {
                 )
                 return@thread
             }
+            if (cancelled) return@thread
             runOnUiThread {
                 progressBar.isIndeterminate = false
                 progressBar.progress = 0
@@ -237,8 +268,10 @@ class ShareActivity : AppCompatActivity() {
     /** Backend route: pickup code + the file in our own storage. */
     private fun uploadViaBackend(base: String, packedFile: PackedFile) {
         try {
+            if (cancelled) return
             val meta = payloadFor(packedFile, downloadUrl = "")
             val created = BackendClient.createTransfer(base, meta)
+            if (cancelled) return
             BackendClient.uploadFile(base, created.uploadToken, packedFile.file, ::reportProgress)
             // From here on the file is addressed by its pickup code.
             val payload = payloadFor(
@@ -260,6 +293,7 @@ class ShareActivity : AppCompatActivity() {
     /** Temporary-hosting route: Litterbox + QR / share text, no pickup code. */
     private fun uploadViaTemporaryHosting(packedFile: PackedFile) {
         try {
+            if (cancelled) return
             val url = LitterboxUploader.upload(packedFile.file, ::reportProgress)
             val payload = payloadFor(packedFile, downloadUrl = url)
             AppLog.log("SEND", "临时托管发送成功，地址=${AppLog.redactUrl(url)}")
@@ -276,7 +310,9 @@ class ShareActivity : AppCompatActivity() {
     private fun showSuccess(payload: TransferPayload, pickupCode: String?) {
         val text = PayloadCodec.shareText(payload, pickupCode)
         runOnUiThread {
+            if (cancelled || isFinishing || isDestroyed) return@runOnUiThread
             working = false
+            cancelUploadButton.visibility = View.GONE
             progressBar.visibility = View.GONE
             resultLayout.visibility = View.VISIBLE
             if (pickupCode != null) {
@@ -306,7 +342,9 @@ class ShareActivity : AppCompatActivity() {
 
     private fun showError(message: String, offerFallback: Boolean) {
         runOnUiThread {
+            if (cancelled || isFinishing || isDestroyed) return@runOnUiThread
             working = false
+            cancelUploadButton.visibility = View.GONE
             progressBar.visibility = View.GONE
             statusText.text = message
             retryButton.visibility = View.VISIBLE
