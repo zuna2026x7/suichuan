@@ -3,6 +3,7 @@ package cloud.suichuan.app
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.View
@@ -33,9 +34,10 @@ import kotlin.concurrent.thread
 /**
  * Receives a transfer four ways: a 6-digit pickup code (needs the code
  * worker), a pasted share message, a bare download link, or an in-app QR
- * scan. However the content arrives, it funnels into [processInput]. The
- * file lands in our private cache — the user never sees a file name, so
- * nothing can be renamed into something uninstallable.
+ * scan. Scan and paste only fill the input box — the user always starts
+ * the transfer explicitly with "开始接收", which funnels into
+ * [processInput]. The file lands in our private cache — the user never
+ * sees a file name, so nothing can be renamed into something uninstallable.
  *
  * A code can also resolve to a TEXT transfer: the message arrives inside
  * the metadata, so instead of downloading anything we show the text card
@@ -65,7 +67,12 @@ class ReceiveActivity : AppCompatActivity() {
     private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
         val contents = result.contents
         when {
-            contents != null -> processInput(contents)
+            // Unified manual flow: scanning only fills the input box.
+            // The user reviews it and taps "开始接收" to start.
+            contents != null -> {
+                inputEdit.setText(contents)
+                Toast.makeText(this, "已填入，点开始接收", Toast.LENGTH_SHORT).show()
+            }
             ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) !=
                 PackageManager.PERMISSION_GRANTED ->
                 Toast.makeText(
@@ -103,6 +110,10 @@ class ReceiveActivity : AppCompatActivity() {
         findViewById<Button>(R.id.button_fetch).setOnClickListener {
             processInput(inputEdit.text.toString())
         }
+        // Same way home as the send screens: clear the receive flow off
+        // the stack so Back from home exits the app.
+        findViewById<Button>(R.id.button_done).setOnClickListener { goHome() }
+        findViewById<Button>(R.id.button_done_text).setOnClickListener { goHome() }
         findViewById<Button>(R.id.button_scan).setOnClickListener {
             val options = ScanOptions()
                 .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
@@ -133,6 +144,15 @@ class ReceiveActivity : AppCompatActivity() {
         }
     }
 
+    /** Returns to the home screen, clearing the receive flow off the stack. */
+    private fun goHome() {
+        val home = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        startActivity(home)
+        finish()
+    }
+
     /**
      * The single entry point for everything the receiver provides: text
      * typed into the input box, a scanned QR code, or clipboard content.
@@ -147,7 +167,7 @@ class ReceiveActivity : AppCompatActivity() {
         }
     }
 
-    /** Reads the clipboard, drops its text into the input box, and runs it. */
+    /** Reads the clipboard and drops its text into the input box only. */
     private fun pasteFromClipboard() {
         val clipboard = getSystemService(ClipboardManager::class.java)
         val text = clipboard
@@ -163,7 +183,7 @@ class ReceiveActivity : AppCompatActivity() {
             return
         }
         inputEdit.setText(text)
-        processInput(text)
+        Toast.makeText(this, "已粘贴，点开始接收", Toast.LENGTH_SHORT).show()
     }
 
     private fun resolveAndDownload(raw: String) {

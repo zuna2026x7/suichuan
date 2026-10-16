@@ -19,7 +19,30 @@
         <TextView
             android:id="@+id/text_status"
             style="@style/Suichuan.HintText"
-            android:text="正在准备…" />
+            android:text="确认一下，再开始发送。" />
+
+        <LinearLayout
+            android:id="@+id/layout_confirm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/text_confirm_detail"
+                style="@style/Suichuan.HintText" />
+
+            <Button
+                android:id="@+id/button_start_send"
+                style="@style/Suichuan.BigButton"
+                android:text="开始发送" />
+
+            <Button
+                android:id="@+id/button_cancel_confirm"
+                style="@style/Suichuan.BigButton"
+                android:text="先不发" />
+        </LinearLayout>
 
         <ProgressBar
             android:id="@+id/progress_upload"
@@ -27,7 +50,14 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:max="100" />
+            android:max="100"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/button_cancel_upload"
+            style="@style/Suichuan.BigButton"
+            android:text="取消"
+            android:visibility="gone" />
 
         <Button
             android:id="@+id/button_retry"

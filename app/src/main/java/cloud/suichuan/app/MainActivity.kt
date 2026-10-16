@@ -7,7 +7,10 @@ import androidx.appcompat.app.AppCompatActivity
 import cloud.suichuan.app.net.LogUploader
 import cloud.suichuan.app.util.AppLog
 
-/** Home screen: four big entries — send an app, send text, receive, rescue. */
+/**
+ * Home screen, grouped into two sections: send (send an app, send text)
+ * and receive (receive app/text, rescue a QQ/WeChat package).
+ */
 class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {

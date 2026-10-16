@@ -39,6 +39,7 @@ class SendTextActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var retryButton: Button
+    private lateinit var directShareButton: Button
     private lateinit var uploadLogButton: Button
     private lateinit var resultLayout: LinearLayout
     private lateinit var codeText: TextView
@@ -58,6 +59,20 @@ class SendTextActivity : AppCompatActivity() {
         statusText = findViewById(R.id.text_status)
         progressBar = findViewById(R.id.progress_send)
         retryButton = findViewById(R.id.button_retry)
+        directShareButton = findViewById(R.id.button_share_direct)
+        directShareButton.setOnClickListener {
+            // Fallback: share the raw text directly, without any server.
+            val raw = textEdit.text.toString()
+            if (raw.isBlank()) {
+                Toast.makeText(this, "先输入或粘贴一段文字，再分享。", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, raw)
+            }
+            startActivity(Intent.createChooser(send, "发给对方"))
+        }
         uploadLogButton = findViewById(R.id.button_upload_log)
         uploadLogButton.setOnClickListener { LogUploader.uploadFrom(this) }
         resultLayout = findViewById(R.id.layout_result)
@@ -138,11 +153,13 @@ class SendTextActivity : AppCompatActivity() {
         }
         val base = BuildConfig.TRANSFER_API_BASE
         if (base.isBlank()) {
-            statusText.text = "这个版本还没有配置取件码服务，文字暂时发不了。"
+            statusText.text = "这个版本还没有配置取件码服务，取件码发不了。可以直接把这段文字分享出去。"
+            directShareButton.visibility = View.VISIBLE
             return
         }
         working = true
         retryButton.visibility = View.GONE
+        directShareButton.visibility = View.GONE
         uploadLogButton.visibility = View.GONE
         resultLayout.visibility = View.GONE
         progressBar.visibility = View.VISIBLE
@@ -165,6 +182,7 @@ class SendTextActivity : AppCompatActivity() {
         runOnUiThread {
             working = false
             progressBar.visibility = View.GONE
+            directShareButton.visibility = View.GONE
             resultLayout.visibility = View.VISIBLE
             statusText.text = "发送完成！72 小时内有效，过期就没了，抓紧让对方接收。"
             codeText.text = code
@@ -184,6 +202,7 @@ class SendTextActivity : AppCompatActivity() {
             progressBar.visibility = View.GONE
             statusText.text = message
             retryButton.visibility = View.VISIBLE
+            directShareButton.visibility = View.VISIBLE
             uploadLogButton.visibility = View.VISIBLE
         }
     }
