@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="发送文件"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <TextView
+            style="@style/Suichuan.HintText"
+            android:text="选一个普通文件发给对方：文档、图片、视频、压缩包都可以。对方收到后保存到下载文件夹，不会安装。" />
+
+        <TextView
+            android:id="@+id/text_file_name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="还没有选文件"
+            android:textSize="20sp" />
+
+        <Button
+            android:id="@+id/button_pick_file"
+            style="@style/Suichuan.BigButton"
+            android:text="选择文件" />
+
+        <TextView
+            android:id="@+id/text_status"
+            style="@style/Suichuan.HintText"
+            android:text="先选一个文件，再确认发送。" />
+
+        <LinearLayout
+            android:id="@+id/layout_confirm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/text_confirm_detail"
+                style="@style/Suichuan.HintText" />
+
+            <Button
+                android:id="@+id/button_start_send"
+                style="@style/Suichuan.BigButton"
+                android:text="开始发送" />
+
+            <Button
+                android:id="@+id/button_cancel_confirm"
+                style="@style/Suichuan.BigButton"
+                android:text="先不发" />
+        </LinearLayout>
+
+        <ProgressBar
+            android:id="@+id/progress_upload"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:max="100"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/button_cancel_upload"
+            style="@style/Suichuan.BigButton"
+            android:text="取消"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/button_retry"
+            style="@style/Suichuan.BigButton"
+            android:text="重试"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/button_fallback"
+            style="@style/Suichuan.BigButton"
+            android:text="改用临时托管发送"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/button_upload_log"
+            style="@style/Suichuan.BigButton"
+            android:text="上传日志帮我看看"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/layout_result"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/text_code_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="取件码（72 小时内有效）"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/text_code"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:gravity="center"
+                android:textSize="56sp"
+                android:textStyle="bold" />
+
+            <ImageView
+                android:id="@+id/image_qr"
+                android:layout_width="240dp"
+                android:layout_height="240dp"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="12dp"
+                android:contentDescription="取件二维码" />
+
+            <TextView
+                style="@style/Suichuan.HintText"
+                android:text="对方打开「随传」接收页：有取件码就输入取件码；也可以点接收页里的「扫码接收」扫这个二维码，或者把你分享的文字粘贴进去，都能收到。" />
+
+            <Button
+                android:id="@+id/button_share"
+                style="@style/Suichuan.BigButton"
+                android:text="发给微信 / QQ 好友" />
+
+            <Button
+                android:id="@+id/button_done"
+                style="@style/Suichuan.BigButton"
+                android:text="完成，返回首页" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

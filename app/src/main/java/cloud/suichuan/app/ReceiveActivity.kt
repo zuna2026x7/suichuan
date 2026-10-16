@@ -3,9 +3,14 @@ package cloud.suichuan.app
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -42,6 +47,12 @@ import kotlin.concurrent.thread
  * A code can also resolve to a TEXT transfer: the message arrives inside
  * the metadata, so instead of downloading anything we show the text card
  * (selectable text + a copy button) and stop there.
+ *
+ * A code can also resolve to a FILE transfer (kind == "file"): the file is
+ * downloaded and SHA-checked like an app package, but it is never
+ * installed — the receiver saves it to Downloads and optionally opens it.
+ * An .apk that arrived as a file stays a file: it is saved, not installed,
+ * so it can never be confused with an app transfer.
  */
 class ReceiveActivity : AppCompatActivity() {
 
@@ -54,10 +65,18 @@ class ReceiveActivity : AppCompatActivity() {
     private lateinit var uploadLogButton: Button
     private lateinit var textLayout: LinearLayout
     private lateinit var receivedTextView: TextView
+    private lateinit var fileLayout: LinearLayout
+    private lateinit var fileNameText: TextView
+    private lateinit var fileDetailText: TextView
+    private lateinit var fileApkNote: TextView
 
     private var receivedTextContent: String = ""
     private var downloadedFile: File? = null
     private var downloadedKind: ApkInspector.Kind = ApkInspector.Kind.INVALID
+    private var downloadedMimeType: String = ""
+    private var downloadedFileName: String = ""
+    private var downloadedIsFile: Boolean = false
+    private var savedFileUri: Uri? = null
     private var busy = false
 
     // QR scanner, registered as a field so the launcher exists before any
@@ -99,6 +118,17 @@ class ReceiveActivity : AppCompatActivity() {
         uploadLogButton.setOnClickListener { LogUploader.uploadFrom(this) }
         textLayout = findViewById(R.id.layout_text)
         receivedTextView = findViewById(R.id.text_received_text)
+        fileLayout = findViewById(R.id.layout_file)
+        fileNameText = findViewById(R.id.text_file_name)
+        fileDetailText = findViewById(R.id.text_file_detail)
+        fileApkNote = findViewById(R.id.text_file_apk_note)
+        findViewById<Button>(R.id.button_done_file).setOnClickListener { goHome() }
+        findViewById<Button>(R.id.button_save_file).setOnClickListener {
+            saveDownloadedFile()
+        }
+        findViewById<Button>(R.id.button_open_file).setOnClickListener {
+            openDownloadedFile()
+        }
         findViewById<Button>(R.id.button_copy_text).setOnClickListener {
             val content = receivedTextContent
             if (content.isEmpty()) return@setOnClickListener
@@ -190,11 +220,12 @@ class ReceiveActivity : AppCompatActivity() {
         if (busy) return
         busy = true
         confirmLayout.visibility = View.GONE
+        fileLayout.visibility = View.GONE
         textLayout.visibility = View.GONE
         uploadLogButton.visibility = View.GONE
         progressBar.visibility = View.VISIBLE
         progressBar.isIndeterminate = true
-        statusText.text = "正在查找这个应用…"
+        statusText.text = "正在查找…"
 
         thread {
             try {
@@ -211,20 +242,32 @@ class ReceiveActivity : AppCompatActivity() {
                     return@thread
                 }
                 val payload = resolved.payload
+                val isFile = resolved.kind == "file" || payload.kind == "file"
+                val mimeType = resolved.mimeType?.takeIf { it.isNotBlank() }
+                    ?: payload.mimeType.takeIf { it.isNotBlank() }
+                    ?: ""
                 AppLog.log(
                     "RECV",
-                    "已解析：应用=${payload.appName} 包名=${payload.packageName} " +
-                        "版本=${payload.versionName} size=${payload.sizeBytes} " +
-                        "有sha=${payload.sha256.isNotBlank()} 地址=${AppLog.redactUrl(payload.downloadUrl)}"
+                    "已解析：kind=${if (isFile) "file" else "app"} 应用=${payload.appName} " +
+                        "包名=${payload.packageName} 版本=${payload.versionName} " +
+                        "size=${payload.sizeBytes} 有sha=${payload.sha256.isNotBlank()} " +
+                        "地址=${AppLog.redactUrl(payload.downloadUrl)}"
                 )
                 val dir = File(cacheDir, "receive").apply { mkdirs() }
                 val safeName = payload.fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
                     .ifBlank { "package.bin" }
                 val target = File(dir, System.currentTimeMillis().toString() + "_" + safeName)
+                val displayName = payload.appName.ifBlank {
+                    if (isFile) payload.fileName.ifBlank { "收到的文件" } else "应用"
+                }
                 runOnUiThread {
                     progressBar.isIndeterminate = false
                     progressBar.progress = 0
-                    statusText.text = "正在下载「${payload.appName.ifBlank { "应用" }}」（${FormatUtil.size(payload.sizeBytes)}）…"
+                    statusText.text = if (isFile) {
+                        "正在下载「$displayName」（${FormatUtil.size(payload.sizeBytes)}）…"
+                    } else {
+                        "正在下载「$displayName」（${FormatUtil.size(payload.sizeBytes)}）…"
+                    }
                 }
                 Downloader.download(payload.downloadUrl, target) { written, total ->
                     if (total > 0) {
@@ -241,6 +284,14 @@ class ReceiveActivity : AppCompatActivity() {
                     }
                     AppLog.log("RECV", "sha256 校验通过")
                 }
+                if (isFile) {
+                    // Ordinary file: no APK inspection, no install. Show
+                    // the save / open card.
+                    runOnUiThread {
+                        showFileTransfer(payload, mimeType, target)
+                    }
+                    return@thread
+                }
                 val inspection = ApkInspector.inspect(target)
                 AppLog.log("RECV", "文件检查结果 kind=${inspection.kind}")
                 if (inspection.kind == ApkInspector.Kind.INVALID) {
@@ -252,6 +303,7 @@ class ReceiveActivity : AppCompatActivity() {
                     progressBar.visibility = View.GONE
                     downloadedFile = target
                     downloadedKind = inspection.kind
+                    downloadedIsFile = false
                     confirmLayout.visibility = View.VISIBLE
                     confirmName.text = payload.appName.ifBlank { "收到的应用" }
                     val parts = mutableListOf<String>()
@@ -272,11 +324,127 @@ class ReceiveActivity : AppCompatActivity() {
         }
     }
 
+    /** Shows a received ordinary file: save to Downloads / open. */
+    private fun showFileTransfer(payload: TransferPayload, mimeType: String, target: File) {
+        busy = false
+        progressBar.visibility = View.GONE
+        confirmLayout.visibility = View.GONE
+        downloadedFile = target
+        downloadedKind = ApkInspector.Kind.INVALID
+        downloadedIsFile = true
+        downloadedMimeType = mimeType.ifBlank { "application/octet-stream" }
+        downloadedFileName = payload.fileName.ifBlank { payload.appName }.ifBlank { "收到的文件" }
+        savedFileUri = null
+        val displayName = payload.appName.ifBlank { downloadedFileName }
+        fileNameText.text = displayName
+        val parts = mutableListOf<String>()
+        parts.add(FormatUtil.size(if (payload.sizeBytes > 0) payload.sizeBytes else target.length()))
+        if (downloadedMimeType.isNotBlank()) parts.add(downloadedMimeType)
+        fileDetailText.text = parts.joinToString(" · ")
+        // An .apk that arrived as a file is saved, never installed.
+        val isApk = downloadedFileName.lowercase().endsWith(".apk") ||
+            downloadedMimeType == "application/vnd.android.package-archive"
+        fileApkNote.visibility = if (isApk) View.VISIBLE else View.GONE
+        findViewById<Button>(R.id.button_open_file).visibility =
+            if (isApk) View.GONE else View.VISIBLE
+        fileLayout.visibility = View.VISIBLE
+        statusText.text = "下载完成，检查通过。"
+    }
+
+    /** Saves the downloaded file into the public Downloads folder. */
+    private fun saveDownloadedFile(): Uri? {
+        val file = downloadedFile
+        if (file == null || !downloadedIsFile) {
+            Toast.makeText(this, "还没有下载好，先完成上面的接收。", Toast.LENGTH_LONG).show()
+            return null
+        }
+        savedFileUri?.let { return it }
+        val name = downloadedFileName.ifBlank { "收到的文件" }
+        return try {
+            val uri = writeToDownloads(file, name, downloadedMimeType)
+            savedFileUri = uri
+            Toast.makeText(this, "已保存到下载：$name", Toast.LENGTH_LONG).show()
+            AppLog.log("RECV", "文件已保存到下载：$name mime=$downloadedMimeType")
+            uri
+        } catch (e: Exception) {
+            AppLog.log("RECV", "保存到下载失败", e)
+            Toast.makeText(this, "保存失败：${e.message ?: "未知问题"}", Toast.LENGTH_LONG).show()
+            null
+        }
+    }
+
+    private fun writeToDownloads(file: File, displayName: String, mimeType: String): Uri {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+                put(MediaStore.Downloads.MIME_TYPE, mimeType.ifBlank { "application/octet-stream" })
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("打不开下载文件夹。")
+            contentResolver.openOutputStream(uri)?.use { output ->
+                file.inputStream().use { input -> input.copyTo(output) }
+            } ?: throw IllegalStateException("打不开下载文件夹。")
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+            return uri
+        } else {
+            @Suppress("DEPRECATION")
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!dir.exists()) dir.mkdirs()
+            var target = File(dir, displayName)
+            // Don't silently overwrite an existing download.
+            var n = 1
+            while (target.exists()) {
+                val base = displayName.substringBeforeLast('.', displayName)
+                val ext = displayName.substringAfterLast('.', "")
+                target = if (ext.isEmpty()) {
+                    File(dir, "$base ($n)")
+                } else {
+                    File(dir, "$base ($n).$ext")
+                }
+                n++
+            }
+            file.copyTo(target, overwrite = false)
+            return Uri.fromFile(target)
+        }
+    }
+
+    /** Opens the saved file with the MIME type the sender recorded. */
+    private fun openDownloadedFile() {
+        val file = downloadedFile
+        if (file == null || !downloadedIsFile) {
+            Toast.makeText(this, "还没有下载好，先完成上面的接收。", Toast.LENGTH_LONG).show()
+            return
+        }
+        val isApk = downloadedFileName.lowercase().endsWith(".apk") ||
+            downloadedMimeType == "application/vnd.android.package-archive"
+        if (isApk) {
+            Toast.makeText(this, "这个 .apk 是经发送文件收到的，只保存不安装。想安装请让对方走发送应用重新发。", Toast.LENGTH_LONG).show()
+            return
+        }
+        val uri = savedFileUri ?: saveDownloadedFile() ?: return
+        val mime = downloadedMimeType.ifBlank { "application/octet-stream" }
+        val view = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mime)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            startActivity(Intent.createChooser(view, "打开文件"))
+        } catch (e: Exception) {
+            AppLog.log("RECV", "打开文件失败 mime=$mime", e)
+            Toast.makeText(this, "这部手机上没有能打开这种文件的应用。文件已保存在下载里。", Toast.LENGTH_LONG).show()
+        }
+    }
+
     /** Shows a received text transfer: the message plus a copy button. */
     private fun showTextTransfer(message: String) {
         busy = false
         progressBar.visibility = View.GONE
         confirmLayout.visibility = View.GONE
+        fileLayout.visibility = View.GONE
         receivedTextContent = message
         receivedTextView.text = message
         textLayout.visibility = View.VISIBLE
@@ -292,7 +460,7 @@ class ReceiveActivity : AppCompatActivity() {
         val fetched = BackendClient.fetchTransfer(base, code)
         AppLog.log(
             "RECV",
-            "取件码 $code：ready=${fetched.ready} kind=${fetched.kind ?: "file"} " +
+            "取件码 $code：ready=${fetched.ready} kind=${fetched.kind ?: "app"} " +
                 "应用=${fetched.payload.appName} size=${fetched.payload.sizeBytes}"
         )
         if (!fetched.ready) {
@@ -321,8 +489,15 @@ class ReceiveActivity : AppCompatActivity() {
             extractPickupCode(raw)?.let { return fetchByCode(it) }
         }
         // (c) Pasted share text containing the encoded payload.
+        // The payload carries its own kind (app/file), so pass it through
+        // — a file share must not fall into the app/install path.
         PayloadCodec.extractFromText(raw)?.let {
-            return BackendClient.FetchedTransfer(it, ready = true)
+            return BackendClient.FetchedTransfer(
+                it,
+                ready = true,
+                kind = it.kind.takeIf { k -> k.isNotBlank() },
+                mimeType = it.mimeType.takeIf { m -> m.isNotBlank() }
+            )
         }
         // (d) Bare download link.
         if (raw.startsWith("https://") || raw.startsWith("http://")) {

@@ -62,6 +62,34 @@ class PayloadCodecTest {
     }
 
     @Test
+    fun roundTripPreservesFileKindAndMime() {
+        val payload = TransferPayload(
+            appName = "报告.pdf",
+            packageName = "",
+            versionName = "",
+            sizeBytes = 12345L,
+            sha256 = "abcdef",
+            fileName = "报告.pdf",
+            downloadUrl = "https://example.com/f/123456",
+            kind = "file",
+            mimeType = "application/pdf"
+        )
+        val decoded = PayloadCodec.decode(PayloadCodec.encode(payload))
+        assertEquals(payload, decoded)
+        // File share text must say 文件, not 应用.
+        val text = PayloadCodec.shareText(payload, "123456")
+        assertEquals(true, text.contains("发了一个文件"))
+        assertEquals(payload, PayloadCodec.extractFromText(text))
+    }
+
+    @Test
+    fun appShareTextStillSaysApp() {
+        val payload = sample().copy(kind = "app")
+        val text = PayloadCodec.shareText(payload, "123456")
+        assertEquals(true, text.contains("发了一个应用"))
+    }
+
+    @Test
     fun backendRecordWithoutDownloadUrlDecodes() {
         // What GET /t/:code returns: metadata + ready, no downloadUrl field.
         val json = """{"appName":"A","packageName":"p","versionName":"1","sizeBytes":42,"sha256":"s","fileName":"f.apk","ready":true}"""

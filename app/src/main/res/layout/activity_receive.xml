@@ -12,7 +12,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="接收应用"
+            android:text="接收"
             android:textSize="28sp"
             android:textStyle="bold" />
 
@@ -102,6 +102,54 @@
 
             <Button
                 android:id="@+id/button_done"
+                style="@style/Suichuan.BigButton"
+                android:text="完成，返回首页" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/layout_file"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="下载完成，保存这个文件："
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/text_file_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textSize="20sp" />
+
+            <TextView
+                android:id="@+id/text_file_detail"
+                style="@style/Suichuan.HintText" />
+
+            <TextView
+                android:id="@+id/text_file_apk_note"
+                style="@style/Suichuan.HintText"
+                android:text="这是经「发送文件」收到的 .apk，只会保存，不会安装。想装应用请让对方走「发送应用」重新发。"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/button_save_file"
+                style="@style/Suichuan.BigButton"
+                android:text="保存到下载" />
+
+            <Button
+                android:id="@+id/button_open_file"
+                style="@style/Suichuan.BigButton"
+                android:text="打开" />
+
+            <Button
+                android:id="@+id/button_done_file"
                 style="@style/Suichuan.BigButton"
                 android:text="完成，返回首页" />
         </LinearLayout>

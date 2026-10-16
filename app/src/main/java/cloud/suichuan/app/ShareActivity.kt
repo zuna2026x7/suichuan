@@ -194,7 +194,8 @@ class ShareActivity : AppCompatActivity() {
             sizeBytes = packedFile.sizeBytes,
             sha256 = packedFile.sha256,
             fileName = packedFile.fileName,
-            downloadUrl = downloadUrl
+            downloadUrl = downloadUrl,
+            kind = "app"
         )
     }
 

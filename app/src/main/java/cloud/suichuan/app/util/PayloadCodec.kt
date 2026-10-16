@@ -90,7 +90,11 @@ object PayloadCodec {
     /** Builds the text the sender shares (and the QR code encodes). */
     fun shareText(payload: TransferPayload, pickupCode: String?): String {
         val sb = StringBuilder()
-        sb.append("随传：我用「随传」给你发了一个应用「").append(payload.appName).append("」。\n")
+        if (payload.kind == "file") {
+            sb.append("随传：我用「随传」给你发了一个文件「").append(payload.appName).append("」。\n")
+        } else {
+            sb.append("随传：我用「随传」给你发了一个应用「").append(payload.appName).append("」。\n")
+        }
         if (!pickupCode.isNullOrBlank()) {
             // The code comes first and prominently: the receiver can type it,
             // or paste this whole message and the app finds the code in it.

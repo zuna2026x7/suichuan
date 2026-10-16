@@ -29,8 +29,12 @@
 // an app. The record stores the text itself and is ready the moment it is
 // created — no PUT follows (the issued upload token is born spent, so a
 // PUT against it gets the usual already-uploaded 409). GET /t returns
-// kind:"text" plus the full text for these records only; file records
-// keep the exact view they have always had.
+// kind:"text" plus the full text for these records only.
+// POST /t also accepts { kind: "file", mimeType, ... }: an ordinary file
+// (not an app package). The record stores kind:"file" + mimeType, and
+// GET /t returns them; GET /f answers with the stored MIME type instead
+// of the APK content type. App records keep no kind in the public view
+// (as before) and the APK content type.
 //
 // Expiry mirrors the worker's KV TTL: a record dies ttlSeconds after
 // creation; a successful upload re-arms it for its remaining TTL (floored
@@ -146,6 +150,21 @@ function pickMeta(payload) {
   };
 }
 
+// Accept only a safe `type/subtype` MIME value; anything else falls back
+// to application/octet-stream. Length-capped so a hostile header can't
+// smuggle a huge string into the record.
+function sanitizeMimeType(value) {
+  if (typeof value !== "string") return "application/octet-stream";
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed.length === 0 || trimmed.length > 128) {
+    return "application/octet-stream";
+  }
+  if (/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(trimmed)) {
+    return trimmed;
+  }
+  return "application/octet-stream";
+}
+
 function clampTtl(payload) {
   const raw = Number(payload.ttlSeconds);
   const wanted =
@@ -155,7 +174,9 @@ function clampTtl(payload) {
 
 // What a receiver may see: metadata + ready flag. Never the tokens.
 // Text transfers additionally expose their kind and the message itself —
-// the text IS the payload. File transfers never gain either field.
+// the text IS the payload. Ordinary-file transfers expose kind:"file"
+// plus their MIME type. App transfers expose no kind (as before; clients
+// treat a missing kind as an app).
 function publicView(record) {
   const view = {
     appName: record.appName,
@@ -169,6 +190,9 @@ function publicView(record) {
   if (record.kind === "text") {
     view.kind = "text";
     view.text = record.text;
+  } else if (record.kind === "file") {
+    view.kind = "file";
+    view.mimeType = sanitizeMimeType(record.mimeType);
   }
   return view;
 }
@@ -522,6 +546,10 @@ async function handleCreate(req, res) {
     payload !== null &&
     typeof payload === "object" &&
     payload.kind === "text";
+  const isFile =
+    payload !== null &&
+    typeof payload === "object" &&
+    payload.kind === "file";
   let meta;
   let extra = {};
   if (isText) {
@@ -565,8 +593,22 @@ async function handleCreate(req, res) {
     meta = pickMeta(payload);
     if (meta.sizeBytes > MAX_BYTES) {
       return sendJson(res, 413, {
-        error: `文件太大了：单个应用最大支持 ${formatLimit(MAX_BYTES)}。`,
+        error: isFile
+          ? `文件太大了：单个文件最大支持 ${formatLimit(MAX_BYTES)}。`
+          : `文件太大了：单个应用最大支持 ${formatLimit(MAX_BYTES)}。`,
       });
+    }
+    if (isFile) {
+      // Display name defaults to the file name when the client did not
+      // send one; the MIME type is sanitized on the way in.
+      if (!meta.appName || meta.appName.trim().length === 0) {
+        meta.appName = meta.fileName;
+      }
+      meta.packageName = "";
+      meta.versionName = "";
+      extra = { kind: "file", mimeType: sanitizeMimeType(payload.mimeType) };
+    } else {
+      extra = { kind: "app" };
     }
   }
 
@@ -788,6 +830,13 @@ async function handleDownload(req, res, code) {
   const total = stat.size;
   const disposition =
     'attachment; filename="' + sanitizeFileName(record.fileName) + '"';
+  // Ordinary files download with their stored MIME type; app packages
+  // keep the APK content type. Unknown / missing MIME falls back to
+  // application/octet-stream.
+  const contentType =
+    record.kind === "file"
+      ? sanitizeMimeType(record.mimeType)
+      : APK_CONTENT_TYPE;
 
   // HTTP Range support: the app downloads big files as parallel segments,
   // because a single cross-border stream is often throttled.
@@ -804,7 +853,7 @@ async function handleDownload(req, res, code) {
   }
   if (range) {
     res.writeHead(206, {
-      "Content-Type": APK_CONTENT_TYPE,
+      "Content-Type": contentType,
       "Content-Disposition": disposition,
       "Content-Range":
         "bytes " + range.start + "-" + range.end + "/" + total,
@@ -817,7 +866,7 @@ async function handleDownload(req, res, code) {
   }
 
   res.writeHead(200, {
-    "Content-Type": APK_CONTENT_TYPE,
+    "Content-Type": contentType,
     "Content-Disposition": disposition,
     "Accept-Ranges": "bytes",
     "Access-Control-Allow-Origin": "*",
