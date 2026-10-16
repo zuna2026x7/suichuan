@@ -8,8 +8,8 @@ import cloud.suichuan.app.net.LogUploader
 import cloud.suichuan.app.util.AppLog
 
 /**
- * Home screen, grouped into two sections: send (send an app, send text)
- * and receive (receive app/text, rescue a QQ/WeChat package).
+ * Home screen, grouped into two sections: send (send an app, send a file,
+ * send text) and receive (receive app/file/text, rescue a QQ/WeChat package).
  */
 class MainActivity : AppCompatActivity() {
 
@@ -20,6 +20,9 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.button_send).setOnClickListener {
             startActivity(Intent(this, SendActivity::class.java))
+        }
+        findViewById<Button>(R.id.button_send_file).setOnClickListener {
+            startActivity(Intent(this, SendFileActivity::class.java))
         }
         findViewById<Button>(R.id.button_send_text).setOnClickListener {
             startActivity(Intent(this, SendTextActivity::class.java))

@@ -34,6 +34,11 @@
             android:text="发送应用" />
 
         <Button
+            android:id="@+id/button_send_file"
+            style="@style/Suichuan.BigButton"
+            android:text="发送文件" />
+
+        <Button
             android:id="@+id/button_send_text"
             style="@style/Suichuan.BigButton"
             android:text="发一段文字" />
@@ -49,7 +54,7 @@
         <Button
             android:id="@+id/button_receive"
             style="@style/Suichuan.BigButton"
-            android:text="接收应用 / 文字" />
+            android:text="接收应用 / 文件 / 文字" />
 
         <Button
             android:id="@+id/button_rescue"

@@ -14,7 +14,15 @@ data class TransferPayload(
     // Optional: empty when the file lives behind our own pickup backend and
     // is addressed by code instead of a direct URL (backend mode fills in
     // "<base>/f/<code>" once the code is known).
-    val downloadUrl: String = ""
+    val downloadUrl: String = "",
+    // What this transfer carries: "app" for an installed-app package,
+    // "file" for an ordinary file, "" for payloads created before kind
+    // existed (treated as "app" by receivers). Text transfers don't use
+    // this class — the text travels in BackendClient's FetchedTransfer.
+    val kind: String = "",
+    // Ordinary files only: the file's MIME type, e.g. "image/png".
+    // Empty for apps and for legacy payloads.
+    val mimeType: String = ""
 ) {
     fun toMap(): Map<String, String> = linkedMapOf(
         "appName" to appName,
@@ -23,7 +31,9 @@ data class TransferPayload(
         "sizeBytes" to sizeBytes.toString(),
         "sha256" to sha256,
         "fileName" to fileName,
-        "downloadUrl" to downloadUrl
+        "downloadUrl" to downloadUrl,
+        "kind" to kind,
+        "mimeType" to mimeType
     )
 
     companion object {
@@ -43,7 +53,9 @@ data class TransferPayload(
                 sizeBytes = map["sizeBytes"]?.toLongOrNull() ?: 0L,
                 sha256 = map["sha256"] ?: "",
                 fileName = map["fileName"] ?: "",
-                downloadUrl = map["downloadUrl"] ?: ""
+                downloadUrl = map["downloadUrl"] ?: "",
+                kind = map["kind"] ?: "",
+                mimeType = map["mimeType"] ?: ""
             )
         }
     }

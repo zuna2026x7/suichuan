@@ -35,11 +35,14 @@ object BackendClient {
     data class FetchedTransfer(
         val payload: TransferPayload,
         val ready: Boolean,
-        // Text transfers only: kind == "text" and [text] holds the message
-        // itself (it travels inside the metadata — no file follows). Both
-        // stay null for ordinary file transfers.
+        // kind: "text" (message in [text], no file follows), "file"
+        // (ordinary file, MIME in [mimeType]), "app" (installed-app
+        // package), or null for records created before kind existed
+        // (treated as "app").
         val kind: String? = null,
-        val text: String? = null
+        val text: String? = null,
+        // Ordinary files only; null/blank for apps and text transfers.
+        val mimeType: String? = null
     )
 
     /** Registers a transfer's metadata and returns its code + upload token. */
@@ -116,15 +119,21 @@ object BackendClient {
         }
     }
 
-    /** Uploads the packed file as the raw request body. Single-use token. */
+    /**
+     * Uploads the file as the raw request body. Single-use token.
+     * [mimeType]: the file's MIME type. App packages default to the APK
+     * type; ordinary files pass their own type (blank -> octet-stream).
+     */
     fun uploadFile(
         base: String,
         uploadToken: String,
         file: File,
-        onProgress: (written: Long, total: Long) -> Unit
+        onProgress: (written: Long, total: Long) -> Unit,
+        mimeType: String = "application/vnd.android.package-archive"
     ) {
         val trimmedBase = base.trimEnd('/')
-        val rawBody = file.asRequestBody("application/vnd.android.package-archive".toMediaTypeOrNull())
+        val contentType = mimeType.ifBlank { "application/octet-stream" }
+        val rawBody = file.asRequestBody(contentType.toMediaTypeOrNull())
         val counting = CountingRequestBody(rawBody, onProgress)
         val request = Request.Builder()
             .url("$trimmedBase/f/$uploadToken")
@@ -169,13 +178,16 @@ object BackendClient {
                 val ready = map["ready"]?.equals("true", ignoreCase = true) == true
                 // Text transfers carry the message itself in the metadata.
                 val kind = map["kind"]?.takeIf { it.isNotBlank() }
+                    ?: payload.kind.takeIf { it.isNotBlank() }
                 val message = if (kind == "text") map["text"] else null
+                val mimeType = map["mimeType"]?.takeIf { it.isNotBlank() }
+                    ?: payload.mimeType.takeIf { it.isNotBlank() }
                 AppLog.log(
                     "API",
-                    "GET /t/$code -> ${response.code}，ready=$ready，kind=${kind ?: "file"}，" +
+                    "GET /t/$code -> ${response.code}，ready=$ready，kind=${kind ?: "app"}，" +
                         "应用=${payload.appName}，size=${payload.sizeBytes}"
                 )
-                FetchedTransfer(payload, ready, kind, message)
+                FetchedTransfer(payload, ready, kind, message, mimeType)
             }
         } catch (e: Exception) {
             AppLog.log("API", "GET /t/$code 失败", e)
