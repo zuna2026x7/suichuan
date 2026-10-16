@@ -1,0 +1,41 @@
+name: Verify backend
+
+# Read-only + one tiny text-record check against the live pickup backend.
+# Does NOT delete, does NOT upload files, does NOT change the server.
+# Manual trigger only.
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify backend is reachable from GitHub Runner
+        run: |
+          set -euxo pipefail
+          BASE="http://198.200.49.120:8081"
+          echo "== 1. GET / =="
+          ROOT="$(curl -sS -m 20 -w "\nHTTP:%{http_code}" "$BASE/")"
+          echo "$ROOT"
+          echo "$ROOT" | grep -q '"ok":true'
+          echo "$ROOT" | grep -q 'suichuan-pickup'
+          echo "GET / OK"
+
+          echo "== 2. POST /t (kind=text, ttl 60s) =="
+          MARKER="suichuan-verify-${GITHUB_RUN_ID}"
+          CREATE="$(curl -sS -m 20 -X POST -H 'Content-Type: application/json' \
+            -d "{\"kind\":\"text\",\"text\":\"${MARKER}\",\"ttlSeconds\":60}" \
+            -w "\nHTTP:%{http_code}" "$BASE/t")"
+          echo "$CREATE"
+          CODE="$(echo "$CREATE" | grep -o '"code":"[0-9]*"' | head -n 1 | cut -d'"' -f4)"
+          echo "code=$CODE"
+          test -n "$CODE"
+          echo "POST /t OK"
+
+          echo "== 3. GET /t/<code> =="
+          FETCHED="$(curl -sS -m 20 -w "\nHTTP:%{http_code}" "$BASE/t/$CODE")"
+          echo "$FETCHED"
+          echo "$FETCHED" | grep -q '"kind":"text"'
+          echo "$FETCHED" | grep -Fq "$MARKER"
+          echo "GET /t/<code> OK"
+          echo "VERIFY PASSED"
