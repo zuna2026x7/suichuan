@@ -2,9 +2,11 @@ name: Verify backend
 
 # Read-only + one tiny text-record check against the live pickup backend.
 # Does NOT delete, does NOT upload files, does NOT change the server.
-# Manual trigger only.
+# Manual trigger + push to this branch (so it can run before the file exists on default branch).
 on:
   workflow_dispatch:
+  push:
+    branches: [chore/verify-backend]
 
 jobs:
   verify:
