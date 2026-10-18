@@ -14,7 +14,9 @@ import cloud.suichuan.app.install.InstallPermissionHelper
 import cloud.suichuan.app.install.Installer
 import cloud.suichuan.app.net.LogUploader
 import cloud.suichuan.app.util.ApkInspector
+import cloud.suichuan.app.install.InstallResultBus
 import cloud.suichuan.app.util.AppLog
+import cloud.suichuan.app.util.ErrorText
 import java.io.File
 import kotlin.concurrent.thread
 
@@ -68,14 +70,36 @@ class RescueActivity : AppCompatActivity() {
             if (!InstallPermissionHelper.ensure(this)) return@setOnClickListener
             try {
                 Installer.install(this, file, readyKind)
-                Toast.makeText(this, "正在打开系统安装界面…", Toast.LENGTH_SHORT).show()
+                statusText.text = "正在打开系统安装界面，按提示点「安装」。"
             } catch (e: Exception) {
                 AppLog.log("RESCUE", "打开系统安装失败", e)
-                Toast.makeText(this, "安装没有打开：${e.message ?: "未知问题"}", Toast.LENGTH_LONG).show()
+                statusText.text = "安装没有打开：" + ErrorText.of(e, "系统安装程序出了问题。")
             }
         }
 
         handleIncomingIntent(intent)
+    }
+
+    /** Install verdict shown on this page instead of a vanishing Toast. */
+    private val installListener = InstallResultBus.Listener { result ->
+        if (!isFinishing && !isDestroyed) {
+            statusText.text = if (result.success) {
+                "✓ 安装完成，可以去桌面打开它了。"
+            } else {
+                result.message
+            }
+            installButton.text = if (result.success) "安装" else "重新安装"
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        InstallResultBus.register(installListener)
+    }
+
+    override fun onStop() {
+        InstallResultBus.unregister(installListener)
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -153,7 +177,7 @@ class RescueActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 AppLog.log("RESCUE", "处理文件失败", e)
                 runOnUiThread {
-                    statusText.text = "没有处理成功：${e.message ?: "未知问题"}"
+                    statusText.text = "没有处理成功：" + ErrorText.of(e, "读取这个文件时出错了。")
                     uploadLogButton.visibility = View.VISIBLE
                 }
             }

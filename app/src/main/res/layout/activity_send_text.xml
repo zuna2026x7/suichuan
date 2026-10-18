@@ -37,7 +37,7 @@
 
         <Button
             android:id="@+id/button_paste"
-            style="@style/Suichuan.BigButton"
+            style="@style/Suichuan.SecondaryButton"
             android:text="从剪贴板粘贴" />
 
         <Button
@@ -47,7 +47,8 @@
 
         <TextView
             android:id="@+id/text_status"
-            style="@style/Suichuan.HintText" />
+            style="@style/Suichuan.HintText"
+            android:accessibilityLiveRegion="polite" />
 
         <ProgressBar
             android:id="@+id/progress_send"
@@ -65,13 +66,13 @@
 
         <Button
             android:id="@+id/button_share_direct"
-            style="@style/Suichuan.BigButton"
+            style="@style/Suichuan.SecondaryButton"
             android:text="直接分享这段文字"
             android:visibility="gone" />
 
         <Button
             android:id="@+id/button_upload_log"
-            style="@style/Suichuan.BigButton"
+            style="@style/Suichuan.TextButton"
             android:text="上传日志帮我看看"
             android:visibility="gone" />
 
@@ -91,12 +92,26 @@
 
             <TextView
                 android:id="@+id/text_code"
+                android:textIsSelectable="false"
+                android:letterSpacing="0.08"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:gravity="center"
                 android:textSize="56sp"
                 android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/text_code_expiry"
+                style="@style/Suichuan.HintText"
+                android:gravity="center"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/button_copy_code"
+                style="@style/Suichuan.SecondaryButton"
+                android:text="复制取件码"
+                android:visibility="gone" />
 
             <ImageView
                 android:id="@+id/image_qr"
@@ -117,7 +132,7 @@
 
             <Button
                 android:id="@+id/button_done"
-                style="@style/Suichuan.BigButton"
+                style="@style/Suichuan.TextButton"
                 android:text="完成，返回首页" />
         </LinearLayout>
     </LinearLayout>

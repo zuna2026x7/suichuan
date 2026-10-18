@@ -32,6 +32,7 @@
     <TextView
         android:id="@+id/text_status"
         style="@style/Suichuan.HintText"
+        android:accessibilityLiveRegion="polite"
         android:text="正在读取应用列表…" />
 
     <ListView

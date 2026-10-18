@@ -25,20 +25,26 @@ object Downloader {
     /** Backoff between segment attempts: this many ms × the failed attempt's number. */
     private const val RETRY_BASE_DELAY_MS = 800L
 
-    fun download(url: String, target: File, onProgress: (written: Long, total: Long) -> Unit): File {
+    fun download(
+        url: String,
+        target: File,
+        cancel: CancelToken? = null,
+        onProgress: (written: Long, total: Long) -> Unit
+    ): File {
         // A single connection to an overseas server is often throttled per
         // stream on the receiver's network, so big files are fetched as
         // parallel byte-range segments when the server supports ranges.
         val startedAt = System.currentTimeMillis()
         AppLog.log("DL", "开始下载 ${AppLog.redactUrl(url)}")
-        val total = probeTotalSize(url)
+        val total = probeTotalSize(url, cancel)
+        cancel?.throwIfCancelled()
         return try {
             val result = if (total != null && total > PARALLEL_THRESHOLD_BYTES) {
                 AppLog.log("DL", "模式=分段并行，总大小=$total")
-                downloadParallel(url, target, total, onProgress)
+                downloadParallel(url, target, total, cancel, onProgress)
             } else {
                 AppLog.log("DL", "模式=单连接，总大小=${total ?: "未知"}")
-                downloadSingle(url, target, onProgress)
+                downloadSingle(url, target, cancel, onProgress)
             }
             AppLog.log(
                 "DL",
@@ -52,9 +58,14 @@ object Downloader {
     }
 
     /** The original single-stream download; also the fallback for servers without range support. */
-    private fun downloadSingle(url: String, target: File, onProgress: (written: Long, total: Long) -> Unit): File {
+    private fun downloadSingle(
+        url: String,
+        target: File,
+        cancel: CancelToken?,
+        onProgress: (written: Long, total: Long) -> Unit
+    ): File {
         val request = Request.Builder().url(url).get().build()
-        HttpClients.instance.newCall(request).execute().use { response ->
+        HttpClients.call(request, cancel).execute().use { response ->
             if (!response.isSuccessful) {
                 throw IOException("下载失败（${response.code}）。链接可能已经过期，让对方重新发送。")
             }
@@ -88,13 +99,13 @@ object Downloader {
      * its Content-Range header reveals the total size ("bytes 0-0/62914560")
      * and segmented downloading is possible; anything else returns null.
      */
-    private fun probeTotalSize(url: String): Long? {
+    private fun probeTotalSize(url: String, cancel: CancelToken?): Long? {
         val request = Request.Builder().url(url)
             .header("Range", "bytes=0-0")
             .get()
             .build()
         return try {
-            HttpClients.instance.newCall(request).execute().use { response ->
+            HttpClients.call(request, cancel).execute().use { response ->
                 if (response.code != 206) {
                     AppLog.log("DL", "探测 -> HTTP ${response.code}（服务器不支持分段）")
                     null
@@ -118,6 +129,7 @@ object Downloader {
         url: String,
         target: File,
         total: Long,
+        cancel: CancelToken?,
         onProgress: (written: Long, total: Long) -> Unit
     ): File {
         target.parentFile?.mkdirs()
@@ -143,7 +155,7 @@ object Downloader {
         try {
             val futures = ranges.mapIndexed { index, range ->
                 pool.submit(Callable {
-                    downloadSegment(index, url, target, range.first, range.second, calls) { read ->
+                    downloadSegment(index, url, target, range.first, range.second, calls, cancel) { read ->
                         val written = writtenTotal.addAndGet(read.toLong())
                         val last = lastReported.get()
                         if ((written - last >= 256 * 1024 || written == total) &&
@@ -204,6 +216,7 @@ object Downloader {
         start: Long,
         end: Long,
         calls: MutableCollection<Call>,
+        cancel: CancelToken?,
         onBytes: (read: Int) -> Unit
     ) {
         val expected = end - start + 1
@@ -211,6 +224,7 @@ object Downloader {
         var lastError: IOException? = null
         for (attempt in 1..MAX_SEGMENT_ATTEMPTS) {
             if (written == expected) return
+            cancel?.throwIfCancelled()
             if (attempt > 1) {
                 // Brief backoff before resuming: 800ms after the first
                 // failure, 1600ms after the second, and so on.
@@ -225,7 +239,7 @@ object Downloader {
                 .header("Range", "bytes=${start + written}-$end")
                 .get()
                 .build()
-            val call = HttpClients.instance.newCall(request)
+            val call = HttpClients.call(request, cancel)
             calls.add(call)
             try {
                 call.execute().use { response ->
@@ -257,6 +271,8 @@ object Downloader {
                     }
                 }
             } catch (e: IOException) {
+                // A user cancel is final: never retry it.
+                cancel?.throwIfCancelled()
                 // Includes mid-stream disconnects: whatever was written
                 // stays on disk and the next attempt resumes after it.
                 lastError = e

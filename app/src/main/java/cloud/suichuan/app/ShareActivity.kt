@@ -16,9 +16,12 @@ import cloud.suichuan.app.data.PackedFile
 import cloud.suichuan.app.data.Packager
 import cloud.suichuan.app.model.TransferPayload
 import cloud.suichuan.app.net.BackendClient
+import cloud.suichuan.app.net.CancelToken
 import cloud.suichuan.app.net.LitterboxUploader
 import cloud.suichuan.app.net.LogUploader
 import cloud.suichuan.app.util.AppLog
+import cloud.suichuan.app.util.CodeUi
+import cloud.suichuan.app.util.ErrorText
 import cloud.suichuan.app.util.FormatUtil
 import cloud.suichuan.app.util.PayloadCodec
 import cloud.suichuan.app.util.QrUtil
@@ -41,8 +44,14 @@ class ShareActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_PACKAGE_NAME = "extra_package_name"
 
-        /** Hard send ceiling: the pickup server rejects anything bigger. */
-        private const val MAX_SEND_BYTES = 2147483648L // 2 GiB
+        /** Litterbox cap: anything bigger cannot go out by either route. */
+        private const val MAX_SEND_BYTES = 1073741824L // 1 GiB
+        /**
+         * Pickup backend cap (server/index.js SUICHUAN_MAX_BYTES default).
+         * Bigger packages go straight to temporary hosting instead of
+         * uploading the whole thing only to be refused with 413.
+         */
+        private const val BACKEND_MAX_BYTES = 100L * 1024L * 1024L // 100 MiB
     }
 
     private lateinit var statusText: TextView
@@ -68,6 +77,9 @@ class ShareActivity : AppCompatActivity() {
     @Volatile
     private var cancelled = false
 
+    /** Cancels the in-flight HTTP calls, not just the next step. */
+    private var cancelToken: CancelToken? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppLog.init(this)
@@ -79,9 +91,11 @@ class ShareActivity : AppCompatActivity() {
         confirmDetail = findViewById(R.id.text_confirm_detail)
         cancelUploadButton = findViewById(R.id.button_cancel_upload)
         cancelUploadButton.setOnClickListener {
-            // Stop the worker thread from continuing, then leave.
+            // Really stop the upload (cancel the HTTP call), then leave.
             cancelled = true
+            cancelToken?.cancel()
             working = false
+            AppLog.log("SEND", "用户取消了发送")
             finish()
         }
         findViewById<Button>(R.id.button_start_send).setOnClickListener {
@@ -141,6 +155,11 @@ class ShareActivity : AppCompatActivity() {
             "大小：${FormatUtil.size(app.sizeBytes)}"
         )
         if (app.versionName.isNotBlank()) confirmLines.add("版本：${app.versionName}")
+        if (app.sizeBytes > MAX_SEND_BYTES) {
+            confirmLines.add("这个应用超过了 1GB 的发送上限，可能发不出去。")
+        } else if (app.sizeBytes > BACKEND_MAX_BYTES) {
+            confirmLines.add("超过 100MB，会改用临时托管发送：没有取件码，对方扫二维码或粘贴分享文字接收。")
+        }
         if (isOnCellular()) {
             confirmLines.add("现在用的是手机流量，发送大约要用这么多流量。")
         } else {
@@ -211,6 +230,7 @@ class ShareActivity : AppCompatActivity() {
         if (working) return
         working = true
         cancelled = false
+        cancelToken = CancelToken()
         confirmLayout.visibility = View.GONE
         retryButton.visibility = View.GONE
         fallbackButton.visibility = View.GONE
@@ -232,7 +252,7 @@ class ShareActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 AppLog.log("SEND", "打包失败 应用=${app.label} 包名=${app.packageName}", e)
                 showError(
-                    "打包没有完成：${e.message ?: "未知问题"}。点重试再试一次。",
+                    "打包没有完成：" + ErrorText.of(e, "读取这个应用的安装文件时出错了。") + "点重试再试一次。",
                     offerFallback = false
                 )
                 return@thread
@@ -247,7 +267,7 @@ class ShareActivity : AppCompatActivity() {
             if (packedFile.sizeBytes > MAX_SEND_BYTES) {
                 AppLog.log("SEND", "超过发送上限：${packedFile.sizeBytes} > $MAX_SEND_BYTES")
                 showError(
-                    "这个应用有 ${FormatUtil.size(packedFile.sizeBytes)}，超过了随传 2GB 的发送上限，暂时发不了。",
+                    "这个应用有 ${FormatUtil.size(packedFile.sizeBytes)}，超过了随传 1GB 的发送上限，暂时发不了。",
                     offerFallback = false
                 )
                 return@thread
@@ -258,9 +278,15 @@ class ShareActivity : AppCompatActivity() {
                 progressBar.progress = 0
                 statusText.text = "正在上传（${FormatUtil.size(packedFile.sizeBytes)}）…"
             }
-            if (useBackend) {
+            if (useBackend && packedFile.sizeBytes <= BACKEND_MAX_BYTES) {
                 uploadViaBackend(base, packedFile)
             } else {
+                if (useBackend) {
+                    AppLog.log("SEND", "超过取件服务上限 ${packedFile.sizeBytes} > $BACKEND_MAX_BYTES，改走临时托管")
+                    runOnUiThread {
+                        statusText.text = "应用超过 100MB，改用临时托管发送（${FormatUtil.size(packedFile.sizeBytes)}）…"
+                    }
+                }
                 uploadViaTemporaryHosting(packedFile)
             }
         }
@@ -271,9 +297,13 @@ class ShareActivity : AppCompatActivity() {
         try {
             if (cancelled) return
             val meta = payloadFor(packedFile, downloadUrl = "")
-            val created = BackendClient.createTransfer(base, meta)
+            val token = cancelToken
+            val created = BackendClient.createTransfer(base, meta, token)
             if (cancelled) return
-            BackendClient.uploadFile(base, created.uploadToken, packedFile.file, ::reportProgress)
+            BackendClient.uploadFile(
+                base, created.uploadToken, packedFile.file, ::reportProgress,
+                cancel = token
+            )
             // From here on the file is addressed by its pickup code.
             val payload = payloadFor(
                 packedFile,
@@ -282,9 +312,10 @@ class ShareActivity : AppCompatActivity() {
             AppLog.log("SEND", "取件服务发送成功，取件码=${created.code}")
             showSuccess(payload, created.code)
         } catch (e: Exception) {
+            if (cancelled) return
             AppLog.log("SEND", "取件服务发送失败", e)
             showError(
-                "用取件服务发送失败了：${e.message ?: "网络出了点问题"}。" +
+                "用取件服务发送失败了：" + ErrorText.of(e, "网络出了点问题。") +
                     "可以点「重试」，或者改用临时托管发送（对方扫二维码或粘贴分享文字接收）。",
                 offerFallback = true
             )
@@ -295,17 +326,28 @@ class ShareActivity : AppCompatActivity() {
     private fun uploadViaTemporaryHosting(packedFile: PackedFile) {
         try {
             if (cancelled) return
-            val url = LitterboxUploader.upload(packedFile.file, ::reportProgress)
+            val url = LitterboxUploader.upload(packedFile.file, ::reportProgress, cancelToken)
             val payload = payloadFor(packedFile, downloadUrl = url)
             AppLog.log("SEND", "临时托管发送成功，地址=${AppLog.redactUrl(url)}")
             showSuccess(payload, pickupCode = null)
         } catch (e: Exception) {
+            if (cancelled) return
             AppLog.log("SEND", "临时托管发送失败", e)
             showError(
-                "没有发出去：${e.message ?: "网络出了点问题"}。检查一下网络，点重试再试一次。",
+                "没有发出去：" + ErrorText.of(e, "网络出了点问题。") + "检查一下网络，点重试再试一次。",
                 offerFallback = false
             )
         }
+    }
+
+    override fun onDestroy() {
+        // Back / swipe away while uploading: stop the upload for real
+        // instead of letting it finish in the background.
+        if (isFinishing && working) {
+            cancelled = true
+            cancelToken?.cancel()
+        }
+        super.onDestroy()
     }
 
     private fun showSuccess(payload: TransferPayload, pickupCode: String?) {
@@ -317,10 +359,13 @@ class ShareActivity : AppCompatActivity() {
             progressBar.visibility = View.GONE
             resultLayout.visibility = View.VISIBLE
             if (pickupCode != null) {
-                statusText.text = "上传完成！72 小时内有效，过期就没了，抓紧让对方接收。"
+                statusText.text = "上传完成！把取件码告诉对方，或者让对方扫下面的二维码。"
                 codeLabel.visibility = View.VISIBLE
                 codeText.visibility = View.VISIBLE
-                codeText.text = pickupCode
+                CodeUi.bind(
+                    this, pickupCode, codeText,
+                    findViewById(R.id.text_code_expiry), findViewById(R.id.button_copy_code)
+                )
             } else {
                 // Temporary-hosting route: there is no pickup code, so the
                 // giant code area must not pretend there is one. The share
@@ -329,7 +374,7 @@ class ShareActivity : AppCompatActivity() {
                     "点下面「发给微信 / QQ 好友」把文字发给对方，对方在接收页粘贴就能收到；" +
                     "对方也可以用接收页的扫码来扫这个二维码。"
                 codeLabel.visibility = View.GONE
-                codeText.text = ""
+                CodeUi.clear(codeText, findViewById(R.id.text_code_expiry), findViewById(R.id.button_copy_code))
                 codeText.visibility = View.GONE
             }
             shareText = text

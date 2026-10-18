@@ -18,18 +18,22 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import cloud.suichuan.app.install.InstallPermissionHelper
+import cloud.suichuan.app.install.InstallResultBus
 import cloud.suichuan.app.install.Installer
 import cloud.suichuan.app.model.TransferPayload
 import cloud.suichuan.app.net.BackendClient
+import cloud.suichuan.app.net.CancelToken
 import cloud.suichuan.app.net.Downloader
 import cloud.suichuan.app.net.LogUploader
 import cloud.suichuan.app.util.ApkInspector
 import cloud.suichuan.app.util.AppLog
+import cloud.suichuan.app.util.ErrorText
 import cloud.suichuan.app.util.FormatUtil
 import cloud.suichuan.app.util.PayloadCodec
 import cloud.suichuan.app.util.Sha256
@@ -78,6 +82,27 @@ class ReceiveActivity : AppCompatActivity() {
     private var downloadedIsFile: Boolean = false
     private var savedFileUri: Uri? = null
     private var busy = false
+    private var downloadedPackageName: String = ""
+
+    /** Cancels the in-flight lookup / download for real. */
+    private var cancelToken: CancelToken? = null
+    private lateinit var cancelDownloadButton: Button
+    private lateinit var installResultText: TextView
+    private lateinit var openAppButton: Button
+    private lateinit var installButton: Button
+
+    /** Shows the system install verdict as a lasting result on this page. */
+    private val installListener = InstallResultBus.Listener { result -> showInstallResult(result) }
+
+    /** Android 8-9: ask for storage access, then retry the save. */
+    private val storagePermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                saveDownloadedFile()
+            } else {
+                statusText.text = "没有存储权限，存不进「下载」文件夹。到系统设置里给随传开启存储权限后，再点「保存到下载」。"
+            }
+        }
 
     // QR scanner, registered as a field so the launcher exists before any
     // click handler can run. A null contents means the scan produced
@@ -116,6 +141,12 @@ class ReceiveActivity : AppCompatActivity() {
         confirmDetail = findViewById(R.id.text_confirm_detail)
         uploadLogButton = findViewById(R.id.button_upload_log)
         uploadLogButton.setOnClickListener { LogUploader.uploadFrom(this) }
+        cancelDownloadButton = findViewById(R.id.button_cancel_download)
+        cancelDownloadButton.setOnClickListener { cancelReceive() }
+        installResultText = findViewById(R.id.text_install_result)
+        openAppButton = findViewById(R.id.button_open_app)
+        openAppButton.setOnClickListener { openInstalledApp() }
+        installButton = findViewById(R.id.button_install)
         textLayout = findViewById(R.id.layout_text)
         receivedTextView = findViewById(R.id.text_received_text)
         fileLayout = findViewById(R.id.layout_file)
@@ -157,7 +188,7 @@ class ReceiveActivity : AppCompatActivity() {
         findViewById<Button>(R.id.button_paste).setOnClickListener {
             pasteFromClipboard()
         }
-        findViewById<Button>(R.id.button_install).setOnClickListener {
+        installButton.setOnClickListener {
             val file = downloadedFile
             if (file == null) {
                 Toast.makeText(this, "还没有下载好，先完成上面的接收。", Toast.LENGTH_LONG).show()
@@ -165,13 +196,79 @@ class ReceiveActivity : AppCompatActivity() {
             }
             if (!InstallPermissionHelper.ensure(this)) return@setOnClickListener
             try {
+                installResultText.visibility = View.GONE
+                openAppButton.visibility = View.GONE
                 Installer.install(this, file, downloadedKind)
-                Toast.makeText(this, "正在打开系统安装界面…", Toast.LENGTH_SHORT).show()
+                statusText.text = "正在打开系统安装界面，按提示点「安装」。"
             } catch (e: Exception) {
                 AppLog.log("RECV", "打开系统安装失败", e)
-                Toast.makeText(this, "安装没有打开：${e.message ?: "未知问题"}", Toast.LENGTH_LONG).show()
+                showInstallResult(
+                    InstallResultBus.Result(
+                        success = false,
+                        packageName = null,
+                        message = "安装没有打开：" + ErrorText.of(e, "系统安装程序出了问题。")
+                    )
+                )
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        InstallResultBus.register(installListener)
+    }
+
+    override fun onStop() {
+        InstallResultBus.unregister(installListener)
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        // Leaving the page stops the download instead of letting it run on.
+        if (isFinishing) cancelToken?.cancel()
+        super.onDestroy()
+    }
+
+    private fun cancelReceive() {
+        cancelToken?.cancel()
+        AppLog.log("RECV", "用户取消了接收")
+        busy = false
+        progressBar.visibility = View.GONE
+        cancelDownloadButton.visibility = View.GONE
+        statusText.text = "已取消接收。需要的话再点「开始接收」。"
+    }
+
+    private fun showInstallResult(result: InstallResultBus.Result) {
+        if (isFinishing || isDestroyed) return
+        installResultText.visibility = View.VISIBLE
+        if (result.success) {
+            installResultText.text = "✓ 安装完成"
+            installResultText.setTextColor(ContextCompat.getColor(this, R.color.suichuan_success))
+            statusText.text = "「${confirmName.text}」已经装好了。"
+            installButton.visibility = View.GONE
+            val pkg = result.packageName?.takeIf { it.isNotBlank() } ?: downloadedPackageName
+            openAppButton.visibility =
+                if (pkg.isNotBlank() && packageManager.getLaunchIntentForPackage(pkg) != null) View.VISIBLE else View.GONE
+            if (pkg.isNotBlank()) downloadedPackageName = pkg
+        } else {
+            installResultText.text = if (result.userCancelled) "安装已取消" else "✗ 没有装上"
+            installResultText.setTextColor(ContextCompat.getColor(this, R.color.suichuan_error))
+            statusText.text = result.message
+            installButton.visibility = View.VISIBLE
+            installButton.text = "重新安装"
+            openAppButton.visibility = View.GONE
+            if (!result.userCancelled) uploadLogButton.visibility = View.VISIBLE
+        }
+    }
+
+    private fun openInstalledApp() {
+        val launch = downloadedPackageName.takeIf { it.isNotBlank() }
+            ?.let { packageManager.getLaunchIntentForPackage(it) }
+        if (launch == null) {
+            Toast.makeText(this, "这个应用没有可以打开的界面，去桌面找找它。", Toast.LENGTH_LONG).show()
+            return
+        }
+        startActivity(launch)
     }
 
     /** Returns to the home screen, clearing the receive flow off the stack. */
@@ -223,13 +320,21 @@ class ReceiveActivity : AppCompatActivity() {
         fileLayout.visibility = View.GONE
         textLayout.visibility = View.GONE
         uploadLogButton.visibility = View.GONE
+        installResultText.visibility = View.GONE
+        openAppButton.visibility = View.GONE
+        installButton.visibility = View.VISIBLE
+        installButton.text = "安装"
         progressBar.visibility = View.VISIBLE
         progressBar.isIndeterminate = true
+        cancelDownloadButton.visibility = View.VISIBLE
         statusText.text = "正在查找…"
+        val token = CancelToken().also { cancelToken = it }
 
         thread {
+            var target: File? = null
             try {
-                val resolved = resolvePayload(raw)
+                val resolved = resolvePayload(raw, token)
+                token.throwIfCancelled()
                 if (resolved.kind == "text") {
                     // A text transfer carries its message in the metadata:
                     // there is no file to download or install — just show it.
@@ -238,7 +343,7 @@ class ReceiveActivity : AppCompatActivity() {
                         "RECV",
                         "收到文字取件：长度=${message.toByteArray(Charsets.UTF_8).size} 字节"
                     )
-                    runOnUiThread { showTextTransfer(message) }
+                    runOnUiThread { if (!token.isCancelled) showTextTransfer(message) }
                     return@thread
                 }
                 val payload = resolved.payload
@@ -256,30 +361,34 @@ class ReceiveActivity : AppCompatActivity() {
                 val dir = File(cacheDir, "receive").apply { mkdirs() }
                 val safeName = payload.fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
                     .ifBlank { "package.bin" }
-                val target = File(dir, System.currentTimeMillis().toString() + "_" + safeName)
+                val file = File(dir, System.currentTimeMillis().toString() + "_" + safeName)
+                target = file
                 val displayName = payload.appName.ifBlank {
                     if (isFile) payload.fileName.ifBlank { "收到的文件" } else "应用"
                 }
                 runOnUiThread {
+                    if (token.isCancelled) return@runOnUiThread
                     progressBar.isIndeterminate = false
                     progressBar.progress = 0
-                    statusText.text = if (isFile) {
-                        "正在下载「$displayName」（${FormatUtil.size(payload.sizeBytes)}）…"
-                    } else {
-                        "正在下载「$displayName」（${FormatUtil.size(payload.sizeBytes)}）…"
-                    }
+                    statusText.text = "正在下载「$displayName」（${FormatUtil.size(payload.sizeBytes)}）…"
                 }
-                Downloader.download(payload.downloadUrl, target) { written, total ->
+                Downloader.download(payload.downloadUrl, file, token) { written, total ->
                     if (total > 0) {
                         val percent = (written * 100 / total).toInt()
-                        runOnUiThread { progressBar.progress = percent }
+                        runOnUiThread {
+                            if (token.isCancelled) return@runOnUiThread
+                            progressBar.progress = percent
+                            statusText.text = "正在下载「$displayName」：" +
+                                "${FormatUtil.size(written)} / ${FormatUtil.size(total)}（$percent%）"
+                        }
                     }
                 }
+                token.throwIfCancelled()
                 if (payload.sha256.isNotBlank()) {
                     runOnUiThread { statusText.text = "下载完成，正在检查文件完整性…" }
-                    val actual = Sha256.ofFile(target)
+                    val actual = Sha256.ofFile(file)
                     if (!actual.equals(payload.sha256, ignoreCase = true)) {
-                        target.delete()
+                        file.delete()
                         throw IllegalStateException("下载到的文件不完整（校验没通过）。网络可能不稳定，重新接收一次。")
                     }
                     AppLog.log("RECV", "sha256 校验通过")
@@ -288,36 +397,45 @@ class ReceiveActivity : AppCompatActivity() {
                     // Ordinary file: no APK inspection, no install. Show
                     // the save / open card.
                     runOnUiThread {
-                        showFileTransfer(payload, mimeType, target)
+                        if (!token.isCancelled) showFileTransfer(payload, mimeType, file)
                     }
                     return@thread
                 }
-                val inspection = ApkInspector.inspect(target)
+                val inspection = ApkInspector.inspect(file)
                 AppLog.log("RECV", "文件检查结果 kind=${inspection.kind}")
                 if (inspection.kind == ApkInspector.Kind.INVALID) {
-                    target.delete()
+                    file.delete()
                     throw IllegalStateException("下载到的东西不是有效的安装包。让对方重新发送一次。")
                 }
                 runOnUiThread {
+                    if (token.isCancelled) return@runOnUiThread
                     busy = false
                     progressBar.visibility = View.GONE
-                    downloadedFile = target
+                    cancelDownloadButton.visibility = View.GONE
+                    downloadedPackageName = payload.packageName
+                    downloadedFile = file
                     downloadedKind = inspection.kind
                     downloadedIsFile = false
                     confirmLayout.visibility = View.VISIBLE
                     confirmName.text = payload.appName.ifBlank { "收到的应用" }
                     val parts = mutableListOf<String>()
                     if (payload.versionName.isNotBlank()) parts.add("版本 " + payload.versionName)
-                    parts.add(FormatUtil.size(if (payload.sizeBytes > 0) payload.sizeBytes else target.length()))
+                    parts.add(FormatUtil.size(if (payload.sizeBytes > 0) payload.sizeBytes else file.length()))
                     confirmDetail.text = parts.joinToString(" · ")
                     statusText.text = "下载完成，检查通过。"
                 }
             } catch (e: Exception) {
-                AppLog.log("RECV", "接收失败（用户看到：${e.message ?: "接收失败"}）", e)
+                if (token.isCancelled) {
+                    target?.delete()
+                    return@thread
+                }
+                val shown = ErrorText.of(e, "接收失败，重新试一次。")
+                AppLog.log("RECV", "接收失败（用户看到：$shown）", e)
                 runOnUiThread {
                     busy = false
                     progressBar.visibility = View.GONE
-                    statusText.text = e.message ?: "接收失败，重新试一次。"
+                    cancelDownloadButton.visibility = View.GONE
+                    statusText.text = shown
                     uploadLogButton.visibility = View.VISIBLE
                 }
             }
@@ -328,6 +446,7 @@ class ReceiveActivity : AppCompatActivity() {
     private fun showFileTransfer(payload: TransferPayload, mimeType: String, target: File) {
         busy = false
         progressBar.visibility = View.GONE
+        cancelDownloadButton.visibility = View.GONE
         confirmLayout.visibility = View.GONE
         downloadedFile = target
         downloadedKind = ApkInspector.Kind.INVALID
@@ -335,11 +454,15 @@ class ReceiveActivity : AppCompatActivity() {
         downloadedMimeType = mimeType.ifBlank { "application/octet-stream" }
         downloadedFileName = payload.fileName.ifBlank { payload.appName }.ifBlank { "收到的文件" }
         savedFileUri = null
+        findViewById<Button>(R.id.button_save_file).apply {
+            text = "保存到下载"
+            isEnabled = true
+        }
         val displayName = payload.appName.ifBlank { downloadedFileName }
         fileNameText.text = displayName
         val parts = mutableListOf<String>()
         parts.add(FormatUtil.size(if (payload.sizeBytes > 0) payload.sizeBytes else target.length()))
-        if (downloadedMimeType.isNotBlank()) parts.add(downloadedMimeType)
+        parts.add(ErrorText.mimeLabel(downloadedMimeType, downloadedFileName))
         fileDetailText.text = parts.joinToString(" · ")
         // An .apk that arrived as a file is saved, never installed.
         val isApk = downloadedFileName.lowercase().endsWith(".apk") ||
@@ -359,16 +482,28 @@ class ReceiveActivity : AppCompatActivity() {
             return null
         }
         savedFileUri?.let { return it }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            statusText.text = "保存到「下载」需要存储权限，请在弹窗里允许。"
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            return null
+        }
         val name = downloadedFileName.ifBlank { "收到的文件" }
         return try {
             val uri = writeToDownloads(file, name, downloadedMimeType)
             savedFileUri = uri
-            Toast.makeText(this, "已保存到下载：$name", Toast.LENGTH_LONG).show()
+            statusText.text = "已保存到手机的「下载」文件夹：$name"
+            findViewById<Button>(R.id.button_save_file).apply {
+                text = "已保存到下载"
+                isEnabled = false
+            }
             AppLog.log("RECV", "文件已保存到下载：$name mime=$downloadedMimeType")
             uri
         } catch (e: Exception) {
             AppLog.log("RECV", "保存到下载失败", e)
-            Toast.makeText(this, "保存失败：${e.message ?: "未知问题"}", Toast.LENGTH_LONG).show()
+            statusText.text = "保存失败：" + ErrorText.of(e, "写入「下载」文件夹时出错了。") + "可以检查手机空间后再试。"
             null
         }
     }
@@ -443,6 +578,7 @@ class ReceiveActivity : AppCompatActivity() {
     private fun showTextTransfer(message: String) {
         busy = false
         progressBar.visibility = View.GONE
+        cancelDownloadButton.visibility = View.GONE
         confirmLayout.visibility = View.GONE
         fileLayout.visibility = View.GONE
         receivedTextContent = message
@@ -452,12 +588,12 @@ class ReceiveActivity : AppCompatActivity() {
     }
 
     /** Fetches a transfer by code from our backend, checking it is ready. */
-    private fun fetchByCode(code: String): BackendClient.FetchedTransfer {
+    private fun fetchByCode(code: String, token: CancelToken?): BackendClient.FetchedTransfer {
         val base = BuildConfig.TRANSFER_API_BASE
         if (base.isBlank()) {
             throw IllegalStateException("这个版本还没有配置取件码服务。请让对方把分享的整段文字发给你，粘贴到这里接收。")
         }
-        val fetched = BackendClient.fetchTransfer(base, code)
+        val fetched = BackendClient.fetchTransfer(base, code, token)
         AppLog.log(
             "RECV",
             "取件码 $code：ready=${fetched.ready} kind=${fetched.kind ?: "app"} " +
@@ -477,16 +613,18 @@ class ReceiveActivity : AppCompatActivity() {
             .firstOrNull { it.matches(Regex("^\\d{6}$")) }
     }
 
-    private fun resolvePayload(raw: String): BackendClient.FetchedTransfer {
+    private fun resolvePayload(raw: String, token: CancelToken?): BackendClient.FetchedTransfer {
         // (a) 6-digit pickup code, typed on its own. (A scanned text-transfer
         // QR lands here too: it encodes the bare code string.)
-        if (raw.matches(Regex("^\\d{6}$"))) {
-            return fetchByCode(raw)
+        // Spaces / dashes are tolerated: "123 456" is how the sender shows it.
+        val compact = raw.replace(Regex("[\\s-]"), "")
+        if (compact.matches(Regex("^\\d{6}$"))) {
+            return fetchByCode(compact, token)
         }
         // (b) Pasted share text that carries a pickup code: the code wins,
         // because the newest metadata (and the file) live behind it.
         if (BuildConfig.TRANSFER_API_BASE.isNotBlank()) {
-            extractPickupCode(raw)?.let { return fetchByCode(it) }
+            extractPickupCode(raw)?.let { return fetchByCode(it, token) }
         }
         // (c) Pasted share text containing the encoded payload.
         // The payload carries its own kind (app/file), so pass it through

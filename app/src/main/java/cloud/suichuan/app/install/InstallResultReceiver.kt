@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.widget.Toast
+import cloud.suichuan.app.install.InstallResultBus
 import cloud.suichuan.app.util.AppLog
 import cloud.suichuan.app.util.InstallErrorMapper
 
@@ -39,11 +40,30 @@ class InstallResultReceiver : BroadcastReceiver() {
                 }
             }
             PackageInstaller.STATUS_SUCCESS -> {
-                Toast.makeText(context, "安装完成！", Toast.LENGTH_LONG).show()
+                val pkg = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
+                val delivered = InstallResultBus.post(
+                    InstallResultBus.Result(success = true, packageName = pkg, message = "安装完成！")
+                )
+                if (!delivered) Toast.makeText(context, "安装完成！", Toast.LENGTH_LONG).show()
             }
             else -> {
                 val raw = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
-                Toast.makeText(context, InstallErrorMapper.messageFor(raw), Toast.LENGTH_LONG).show()
+                val pkg = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
+                val aborted = status == PackageInstaller.STATUS_FAILURE_ABORTED
+                val message = if (aborted) {
+                    "安装已取消。想装的话，点「重新安装」再来一次。"
+                } else {
+                    InstallErrorMapper.messageFor(raw)
+                }
+                val delivered = InstallResultBus.post(
+                    InstallResultBus.Result(
+                        success = false,
+                        packageName = pkg,
+                        message = message,
+                        userCancelled = aborted
+                    )
+                )
+                if (!delivered) Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             }
         }
     }

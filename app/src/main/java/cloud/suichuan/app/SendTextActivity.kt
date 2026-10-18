@@ -17,6 +17,8 @@ import androidx.appcompat.app.AppCompatActivity
 import cloud.suichuan.app.net.BackendClient
 import cloud.suichuan.app.net.LogUploader
 import cloud.suichuan.app.util.AppLog
+import cloud.suichuan.app.util.CodeUi
+import cloud.suichuan.app.util.ErrorText
 import cloud.suichuan.app.util.QrUtil
 import kotlin.concurrent.thread
 
@@ -172,7 +174,7 @@ class SendTextActivity : AppCompatActivity() {
                 showSuccess(created.code)
             } catch (e: Exception) {
                 AppLog.log("SEND", "文字发送失败", e)
-                showError("没有发出去：${e.message ?: "网络出了点问题"}。检查一下网络，点重试再试一次。")
+                showError("没有发出去：" + ErrorText.of(e, "网络出了点问题。") + "检查一下网络，点重试再试一次。")
             }
         }
     }
@@ -184,8 +186,11 @@ class SendTextActivity : AppCompatActivity() {
             progressBar.visibility = View.GONE
             directShareButton.visibility = View.GONE
             resultLayout.visibility = View.VISIBLE
-            statusText.text = "发送完成！72 小时内有效，过期就没了，抓紧让对方接收。"
-            codeText.text = code
+            statusText.text = "发送完成！把取件码告诉对方，或者让对方扫下面的二维码。"
+            CodeUi.bind(
+                this, code, codeText,
+                findViewById(R.id.text_code_expiry), findViewById(R.id.button_copy_code)
+            )
             try {
                 // The QR carries the bare code string: the receiver's
                 // scanner treats a lone 6-digit string as a pickup code.

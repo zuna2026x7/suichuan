@@ -22,12 +22,12 @@
 
         <Button
             android:id="@+id/button_scan"
-            style="@style/Suichuan.BigButton"
+            style="@style/Suichuan.SecondaryButton"
             android:text="扫码接收" />
 
         <Button
             android:id="@+id/button_paste"
-            style="@style/Suichuan.BigButton"
+            style="@style/Suichuan.SecondaryButton"
             android:text="粘贴剪贴板内容" />
 
         <EditText
@@ -36,7 +36,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:gravity="top"
-            android:hint="取件码 / 分享文字 / 链接"
+            android:hint="6 位取件码，或粘贴分享文字 / 链接"
             android:importantForAutofill="no"
             android:inputType="textMultiLine"
             android:minLines="2" />
@@ -48,7 +48,8 @@
 
         <TextView
             android:id="@+id/text_status"
-            style="@style/Suichuan.HintText" />
+            style="@style/Suichuan.HintText"
+            android:accessibilityLiveRegion="polite" />
 
         <ProgressBar
             android:id="@+id/progress_download"
@@ -60,8 +61,14 @@
             android:visibility="gone" />
 
         <Button
+            android:id="@+id/button_cancel_download"
+            style="@style/Suichuan.SecondaryButton"
+            android:text="取消接收"
+            android:visibility="gone" />
+
+        <Button
             android:id="@+id/button_upload_log"
-            style="@style/Suichuan.BigButton"
+            style="@style/Suichuan.TextButton"
             android:text="上传日志帮我看看"
             android:visibility="gone" />
 
@@ -95,6 +102,22 @@
                 style="@style/Suichuan.HintText"
                 android:text="提醒：这里只安装应用本身，不包含对方手机里的账号和数据。银行、支付类应用装好后也可能因为设备不同而用不了。" />
 
+            <TextView
+                android:id="@+id/text_install_result"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:accessibilityLiveRegion="polite"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/button_open_app"
+                style="@style/Suichuan.BigButton"
+                android:text="打开应用"
+                android:visibility="gone" />
+
             <Button
                 android:id="@+id/button_install"
                 style="@style/Suichuan.BigButton"
@@ -102,7 +125,7 @@
 
             <Button
                 android:id="@+id/button_done"
-                style="@style/Suichuan.BigButton"
+                style="@style/Suichuan.TextButton"
                 android:text="完成，返回首页" />
         </LinearLayout>
 
@@ -145,12 +168,12 @@
 
             <Button
                 android:id="@+id/button_open_file"
-                style="@style/Suichuan.BigButton"
+                style="@style/Suichuan.SecondaryButton"
                 android:text="打开" />
 
             <Button
                 android:id="@+id/button_done_file"
-                style="@style/Suichuan.BigButton"
+                style="@style/Suichuan.TextButton"
                 android:text="完成，返回首页" />
         </LinearLayout>
 
@@ -184,7 +207,7 @@
 
             <Button
                 android:id="@+id/button_done_text"
-                style="@style/Suichuan.BigButton"
+                style="@style/Suichuan.TextButton"
                 android:text="完成，返回首页" />
         </LinearLayout>
     </LinearLayout>

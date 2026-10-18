@@ -19,6 +19,25 @@
         <item name="android:layout_marginTop">16dp</item>
     </style>
 
+    <!-- Secondary action (cancel, fallback, scan/paste): outlined, so the
+         one primary action on each screen stands out. -->
+    <style name="Suichuan.SecondaryButton" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">56dp</item>
+        <item name="android:textSize">18sp</item>
+        <item name="android:layout_marginTop">12dp</item>
+    </style>
+
+    <!-- Tertiary action (back home, not now, upload log): text only. -->
+    <style name="Suichuan.TextButton" parent="Widget.MaterialComponents.Button.TextButton">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:layout_marginTop">8dp</item>
+    </style>
+
     <style name="Suichuan.HintText">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>

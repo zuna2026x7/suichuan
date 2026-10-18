@@ -18,9 +18,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import cloud.suichuan.app.model.TransferPayload
 import cloud.suichuan.app.net.BackendClient
+import cloud.suichuan.app.net.CancelToken
 import cloud.suichuan.app.net.LitterboxUploader
 import cloud.suichuan.app.net.LogUploader
 import cloud.suichuan.app.util.AppLog
+import cloud.suichuan.app.util.ErrorText
+import cloud.suichuan.app.util.CodeUi
 import cloud.suichuan.app.util.FormatUtil
 import cloud.suichuan.app.util.PayloadCodec
 import cloud.suichuan.app.util.QrUtil
@@ -78,6 +81,9 @@ class SendFileActivity : AppCompatActivity() {
     @Volatile
     private var cancelled = false
 
+    /** Cancels the in-flight HTTP calls, not just the next step. */
+    private var cancelToken: CancelToken? = null
+
     private val pickLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) prepareFile(uri)
@@ -96,7 +102,9 @@ class SendFileActivity : AppCompatActivity() {
         cancelUploadButton = findViewById(R.id.button_cancel_upload)
         cancelUploadButton.setOnClickListener {
             cancelled = true
+            cancelToken?.cancel()
             working = false
+            AppLog.log("SENDFILE", "用户取消了发送")
             finish()
         }
         findViewById<Button>(R.id.button_pick_file).setOnClickListener {
@@ -182,7 +190,7 @@ class SendFileActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 AppLog.log("SENDFILE", "读取文件失败", e)
                 runOnUiThread {
-                    statusText.text = "没有读到这个文件：${e.message ?: "未知问题"}。换一个文件试试。"
+                    statusText.text = "没有读到这个文件：" + ErrorText.of(e, "读取时出错了。") + "换一个文件试试。"
                 }
             }
         }
@@ -247,14 +255,14 @@ class SendFileActivity : AppCompatActivity() {
             "要发送：$pickedName",
             "大小：${FormatUtil.size(pickedSize)}"
         )
-        if (pickedMime.isNotBlank()) lines.add("类型：$pickedMime")
+        lines.add("类型：" + ErrorText.mimeLabel(pickedMime, pickedName))
         if (isOnCellular()) {
             lines.add("现在用的是手机流量，发送大约要用这么多流量。")
         } else {
             lines.add("发送大约要用这么多流量（建议在 Wi-Fi 下发送）。")
         }
         if (pickedSize > BACKEND_MAX_BYTES) {
-            lines.add("这个文件超过了取件服务 100MB 的上限，发送时会直接走临时托管（上限 1GB）。")
+            lines.add("超过 100MB，会改用临时托管发送：没有取件码，对方扫二维码或粘贴分享文字接收（上限 1GB）。")
         }
         confirmDetail.text = lines.joinToString("\n")
         confirmLayout.visibility = View.VISIBLE
@@ -290,6 +298,7 @@ class SendFileActivity : AppCompatActivity() {
         if (working) return
         working = true
         cancelled = false
+        cancelToken = CancelToken()
         confirmLayout.visibility = View.GONE
         retryButton.visibility = View.GONE
         fallbackButton.visibility = View.GONE
@@ -339,11 +348,13 @@ class SendFileActivity : AppCompatActivity() {
         try {
             if (cancelled) return
             val meta = payloadFor(downloadUrl = "")
-            val created = BackendClient.createTransfer(base, meta)
+            val token = cancelToken
+            val created = BackendClient.createTransfer(base, meta, token)
             if (cancelled) return
             BackendClient.uploadFile(
                 base, created.uploadToken, file, ::reportProgress,
-                mimeType = pickedMime.ifBlank { "application/octet-stream" }
+                mimeType = pickedMime.ifBlank { "application/octet-stream" },
+                cancel = token
             )
             val payload = payloadFor(
                 downloadUrl = base.trimEnd('/') + "/f/" + created.code
@@ -351,9 +362,10 @@ class SendFileActivity : AppCompatActivity() {
             AppLog.log("SENDFILE", "取件服务发送成功，取件码=${created.code} 文件=$pickedName")
             showSuccess(payload, created.code)
         } catch (e: Exception) {
+            if (cancelled) return
             AppLog.log("SENDFILE", "取件服务发送失败", e)
             showError(
-                "用取件服务发送失败了：${e.message ?: "网络出了点问题"}。" +
+                "用取件服务发送失败了：" + ErrorText.of(e, "网络出了点问题。") +
                     "可以点「重试」，或者改用临时托管发送（对方扫二维码或粘贴分享文字接收）。",
                 offerFallback = true
             )
@@ -364,17 +376,28 @@ class SendFileActivity : AppCompatActivity() {
     private fun uploadViaTemporaryHosting(file: File) {
         try {
             if (cancelled) return
-            val url = LitterboxUploader.upload(file, ::reportProgress)
+            val url = LitterboxUploader.upload(file, ::reportProgress, cancelToken)
             val payload = payloadFor(downloadUrl = url)
             AppLog.log("SENDFILE", "临时托管发送成功，地址=${AppLog.redactUrl(url)} 文件=$pickedName")
             showSuccess(payload, pickupCode = null)
         } catch (e: Exception) {
+            if (cancelled) return
             AppLog.log("SENDFILE", "临时托管发送失败", e)
             showError(
-                "没有发出去：${e.message ?: "网络出了点问题"}。检查一下网络，点重试再试一次。",
+                "没有发出去：" + ErrorText.of(e, "网络出了点问题。") + "检查一下网络，点重试再试一次。",
                 offerFallback = false
             )
         }
+    }
+
+    override fun onDestroy() {
+        // Back / swipe away while uploading: stop the upload for real
+        // instead of letting it finish in the background.
+        if (isFinishing && working) {
+            cancelled = true
+            cancelToken?.cancel()
+        }
+        super.onDestroy()
     }
 
     private fun showSuccess(payload: TransferPayload, pickupCode: String?) {
@@ -386,16 +409,19 @@ class SendFileActivity : AppCompatActivity() {
             progressBar.visibility = View.GONE
             resultLayout.visibility = View.VISIBLE
             if (pickupCode != null) {
-                statusText.text = "上传完成！72 小时内有效，过期就没了，抓紧让对方接收。"
+                statusText.text = "上传完成！把取件码告诉对方，或者让对方扫下面的二维码。"
                 codeLabel.visibility = View.VISIBLE
                 codeText.visibility = View.VISIBLE
-                codeText.text = pickupCode
+                CodeUi.bind(
+                    this, pickupCode, codeText,
+                    findViewById(R.id.text_code_expiry), findViewById(R.id.button_copy_code)
+                )
             } else {
                 statusText.text = "上传完成！这个发送方式没有取件码。" +
                     "点下面「发给微信 / QQ 好友」把文字发给对方，对方在接收页粘贴就能收到；" +
                     "对方也可以用接收页的扫码来扫这个二维码。"
                 codeLabel.visibility = View.GONE
-                codeText.text = ""
+                CodeUi.clear(codeText, findViewById(R.id.text_code_expiry), findViewById(R.id.button_copy_code))
                 codeText.visibility = View.GONE
             }
             shareText = text

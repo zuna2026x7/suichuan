@@ -4,4 +4,6 @@
     <color name="suichuan_primary_dark">#0D47A1</color>
     <color name="suichuan_accent">#00897B</color>
     <color name="suichuan_text_hint">#666666</color>
+    <color name="suichuan_success">#2E7D32</color>
+    <color name="suichuan_error">#C62828</color>
 </resources>

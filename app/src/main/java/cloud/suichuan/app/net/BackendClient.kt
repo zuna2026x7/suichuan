@@ -2,6 +2,7 @@ package cloud.suichuan.app.net
 
 import cloud.suichuan.app.model.TransferPayload
 import cloud.suichuan.app.util.AppLog
+import cloud.suichuan.app.util.ErrorText
 import cloud.suichuan.app.util.PayloadCodec
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -46,7 +47,11 @@ object BackendClient {
     )
 
     /** Registers a transfer's metadata and returns its code + upload token. */
-    fun createTransfer(base: String, payload: TransferPayload): CreatedTransfer {
+    fun createTransfer(
+        base: String,
+        payload: TransferPayload,
+        cancel: CancelToken? = null
+    ): CreatedTransfer {
         val trimmedBase = base.trimEnd('/')
         // Ask for the full 72h so the code lives as long as the UI promises.
         val bodyMap = payload.toMap() + ("ttlSeconds" to (72 * 60 * 60).toString())
@@ -55,10 +60,13 @@ object BackendClient {
             .post(PayloadCodec.writeMap(bodyMap).toRequestBody(JSON))
             .build()
         return try {
-            HttpClients.instance.newCall(request).execute().use { response ->
+            HttpClients.call(request, cancel).execute().use { response ->
                 val text = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    throw IOException("取件服务出错（${response.code}），暂时没法发送。")
+                    throw IOException(
+                        ErrorText.serverError(text)
+                            ?: "取件服务出错（${response.code}），暂时没法发送。"
+                    )
                 }
                 val map = PayloadCodec.parseMap(text)
                     ?: throw IOException("取件服务返回的内容看不懂，暂时没法发送。")
@@ -82,7 +90,11 @@ object BackendClient {
      * (The returned upload token exists only to keep the create response
      * shape identical; it is never used.)
      */
-    fun createTextTransfer(base: String, text: String): CreatedTransfer {
+    fun createTextTransfer(
+        base: String,
+        text: String,
+        cancel: CancelToken? = null
+    ): CreatedTransfer {
         val trimmedBase = base.trimEnd('/')
         val bodyMap = linkedMapOf(
             "kind" to "text",
@@ -94,10 +106,13 @@ object BackendClient {
             .post(PayloadCodec.writeMap(bodyMap).toRequestBody(JSON))
             .build()
         return try {
-            HttpClients.instance.newCall(request).execute().use { response ->
+            HttpClients.call(request, cancel).execute().use { response ->
                 val responseText = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    throw IOException("取件服务出错（${response.code}），暂时没法发送。")
+                    throw IOException(
+                        ErrorText.serverError(responseText)
+                            ?: "取件服务出错（${response.code}），暂时没法发送。"
+                    )
                 }
                 val map = PayloadCodec.parseMap(responseText)
                     ?: throw IOException("取件服务返回的内容看不懂，暂时没法发送。")
@@ -129,7 +144,8 @@ object BackendClient {
         uploadToken: String,
         file: File,
         onProgress: (written: Long, total: Long) -> Unit,
-        mimeType: String = "application/vnd.android.package-archive"
+        mimeType: String = "application/vnd.android.package-archive",
+        cancel: CancelToken? = null
     ) {
         val trimmedBase = base.trimEnd('/')
         val contentType = mimeType.ifBlank { "application/octet-stream" }
@@ -140,11 +156,19 @@ object BackendClient {
             .put(counting)
             .build()
         try {
-            HttpClients.instance.newCall(request).execute().use { response ->
+            HttpClients.call(request, cancel).execute().use { response ->
                 // Drain the body so the connection can be reused.
-                response.body?.string()
+                val text = response.body?.string()
                 if (!response.isSuccessful) {
-                    throw IOException("文件没有传上去（${response.code}）。可以重试，或者改用临时托管发送。")
+                    val server = ErrorText.serverError(text)
+                    throw IOException(
+                        when {
+                            response.code == 413 ->
+                                server ?: "文件超过了取件服务的大小上限。可以改用临时托管发送。"
+                            server != null -> server
+                            else -> "文件没有传上去（${response.code}）。可以重试，或者改用临时托管发送。"
+                        }
+                    )
                 }
                 // The token itself never goes into the log — only its shape.
                 AppLog.log("API", "PUT /f/:token -> ${response.code}，bytes=${file.length()}")
@@ -156,17 +180,24 @@ object BackendClient {
     }
 
     /** Looks a transfer up by pickup code for the receiving side. */
-    fun fetchTransfer(base: String, code: String): FetchedTransfer {
+    fun fetchTransfer(
+        base: String,
+        code: String,
+        cancel: CancelToken? = null
+    ): FetchedTransfer {
         val trimmedBase = base.trimEnd('/')
         val request = Request.Builder().url("$trimmedBase/t/$code").get().build()
         return try {
-            HttpClients.instance.newCall(request).execute().use { response ->
+            HttpClients.call(request, cancel).execute().use { response ->
                 val text = response.body?.string().orEmpty()
                 if (response.code == 404) {
                     throw IOException("这个取件码不存在，或者已经过期了。让对方重新发送一次。")
                 }
                 if (!response.isSuccessful) {
-                    throw IOException("取件服务出错（${response.code}），稍后再试一次。")
+                    throw IOException(
+                        ErrorText.serverError(text)
+                            ?: "取件服务出错（${response.code}），稍后再试一次。"
+                    )
                 }
                 val map = PayloadCodec.parseMap(text)
                     ?: throw IOException("取件码对应的内容看不懂，让对方重新发送一次。")

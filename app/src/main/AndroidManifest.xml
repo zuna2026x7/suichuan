@@ -7,6 +7,11 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Android 8-9 only: saving a received file into the public Downloads
+         folder. Android 10+ uses MediaStore and needs no permission. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <!-- Needed to list every installed app so the user can pick one to send.
          This is a restricted permission on Google Play; this MVP is sideloaded. -->
     <uses-permission
@@ -32,26 +37,31 @@
 
         <activity
             android:name=".SendActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:exported="false"
             android:label="发送应用" />
 
         <activity
             android:name=".SendTextActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:exported="false"
             android:label="发一段文字" />
 
         <activity
             android:name=".SendFileActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:exported="false"
             android:label="发送文件" />
 
         <activity
             android:name=".ShareActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:exported="false"
             android:label="生成取件码" />
 
         <activity
             android:name=".ReceiveActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:exported="false"
             android:label="输入取件码" />
 
@@ -74,6 +84,7 @@
              incoming "open with"/share intents carrying a content URI. -->
         <activity
             android:name=".RescueActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:exported="true"
             android:label="安装收到的安装包">
             <intent-filter>

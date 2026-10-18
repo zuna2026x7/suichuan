@@ -19,7 +19,11 @@ object LitterboxUploader {
     private const val API_URL = "https://litterbox.catbox.moe/resources/internals/api.php"
     const val EXPIRES_TEXT = "72h"
 
-    fun upload(file: File, onProgress: (written: Long, total: Long) -> Unit): String {
+    fun upload(
+        file: File,
+        onProgress: (written: Long, total: Long) -> Unit,
+        cancel: CancelToken? = null
+    ): String {
         val fileBody = file.asRequestBody("application/octet-stream".toMediaTypeOrNull())
         val multipart = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -32,13 +36,13 @@ object LitterboxUploader {
             .url(API_URL)
             .post(counting)
             .build()
-        HttpClients.instance.newCall(request).execute().use { response ->
+        HttpClients.call(request, cancel).execute().use { response ->
             val bodyText = response.body?.string()?.trim().orEmpty()
             if (!response.isSuccessful) {
                 throw IOException("上传服务返回了错误（${response.code}）。请稍后再试。")
             }
             if (!bodyText.startsWith("http")) {
-                throw IOException("上传没有成功：$bodyText")
+                throw IOException("临时托管服务没有接收这个文件，稍后再试一次。")
             }
             return bodyText
         }
