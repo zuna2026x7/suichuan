@@ -7,7 +7,7 @@ name: Release APK
 # someone opens it on GitHub and clicks "Publish release".
 #
 # One-time setup (repo Settings → Secrets and variables → Actions):
-#   KEYPASS (or SUICHUAN_KEYSTORE_PASSWORD)  decrypts signing/release.jks.enc and unlocks it
+#   KEY_PASS (or KEYPASS / SUICHUAN_KEYSTORE_PASSWORD)  decrypts signing/release.jks.enc and unlocks it
 # (Alternatively SUICHUAN_KEYSTORE_BASE64 / SUICHUAN_KEY_ALIAS /
 #  SUICHUAN_KEY_PASSWORD for a keystore kept outside the repo.)
 # Keep the keystore safe: every future update must be signed with the same
@@ -59,7 +59,7 @@ jobs:
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.SUICHUAN_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.SUICHUAN_KEYSTORE_PASSWORD || secrets.KEYPASS }}
+          KEYSTORE_PASSWORD: ${{ secrets.SUICHUAN_KEYSTORE_PASSWORD || secrets.KEYPASS || secrets.KEY_PASS }}
         run: |
           # Two ways to provide the release key:
           #  a) SUICHUAN_KEYSTORE_BASE64 secret (base64 of the .jks), or
@@ -81,7 +81,7 @@ jobs:
 
       - name: Unit tests and signed release build
         env:
-          SUICHUAN_KEYSTORE_PASSWORD: ${{ secrets.SUICHUAN_KEYSTORE_PASSWORD || secrets.KEYPASS }}
+          SUICHUAN_KEYSTORE_PASSWORD: ${{ secrets.SUICHUAN_KEYSTORE_PASSWORD || secrets.KEYPASS || secrets.KEY_PASS }}
           SUICHUAN_KEY_ALIAS: ${{ secrets.SUICHUAN_KEY_ALIAS }}
           SUICHUAN_KEY_PASSWORD: ${{ secrets.SUICHUAN_KEY_PASSWORD }}
         run: |
