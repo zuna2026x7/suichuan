@@ -51,6 +51,11 @@
             android:label="生成取件码" />
 
         <activity
+            android:name=".UpdateActivity"
+            android:exported="false"
+            android:label="检查更新" />
+
+        <activity
             android:name=".ReceiveActivity"
             android:exported="false"
             android:label="输入取件码" />

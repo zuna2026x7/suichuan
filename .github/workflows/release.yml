@@ -1,0 +1,90 @@
+name: Release APK
+
+# Builds a signed release APK and attaches it to a DRAFT GitHub Release.
+# Runs only when a version tag is pushed (e.g. `git tag v1.4 && git push origin v1.4`)
+# or when started by hand from the Actions tab. Nothing is published
+# automatically: the draft stays invisible to the in-app update check until
+# someone opens it on GitHub and clicks "Publish release".
+#
+# One-time setup (repo Settings → Secrets and variables → Actions):
+#   SUICHUAN_KEYSTORE_BASE64   base64 of the release keystore (.jks)
+#   SUICHUAN_KEYSTORE_PASSWORD keystore password
+#   SUICHUAN_KEY_ALIAS         key alias
+#   SUICHUAN_KEY_PASSWORD      key password
+# Keep the keystore safe: every future update must be signed with the same
+# key, or Android refuses to install it over the existing app.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to build, e.g. v1.4"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version from tag
+        id: ver
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          NAME="${TAG#v}"
+          # One monotonic scheme: v1.4 -> 10400, v1.4.2 -> 10402, v1.5 -> 10500.
+          IFS=. read -r MAJ MIN PAT <<< "$NAME"
+          CODE=$(( ${MAJ:-0}*10000 + ${MIN:-0}*100 + ${PAT:-0} ))
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SUICHUAN_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::SUICHUAN_KEYSTORE_BASE64 secret is missing; refusing to publish an unsigned/debug-signed update."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "SUICHUAN_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Unit tests and signed release build
+        env:
+          SUICHUAN_KEYSTORE_PASSWORD: ${{ secrets.SUICHUAN_KEYSTORE_PASSWORD }}
+          SUICHUAN_KEY_ALIAS: ${{ secrets.SUICHUAN_KEY_ALIAS }}
+          SUICHUAN_KEY_PASSWORD: ${{ secrets.SUICHUAN_KEY_PASSWORD }}
+        run: >
+          gradle testReleaseUnitTest assembleRelease --stacktrace
+          -PappVersionName=${{ steps.ver.outputs.name }}
+          -PappVersionCode=${{ steps.ver.outputs.code }}
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/app-release.apk "suichuan-${{ steps.ver.outputs.tag }}.apk"
+
+      - name: Create draft release with the APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: 随传 ${{ steps.ver.outputs.tag }}
+          draft: true
+          files: suichuan-${{ steps.ver.outputs.tag }}.apk
