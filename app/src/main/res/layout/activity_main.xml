@@ -20,6 +20,16 @@
             style="@style/Suichuan.HintText"
             android:text="把这台手机上的应用，通过网络传到另一台手机。不用连同一个 Wi-Fi，也不用改文件名。" />
 
+        <!-- Shown only when a silent check found a newer release. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/button_update_banner"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:minHeight="56dp"
+            android:visibility="gone" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -73,5 +83,14 @@
             android:layout_gravity="center_horizontal"
             android:layout_marginTop="24dp"
             android:text="上传日志帮我看看" />
+
+        <Button
+            android:id="@+id/button_check_update"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:minHeight="48dp"
+            android:text="检查更新" />
     </LinearLayout>
 </ScrollView>
