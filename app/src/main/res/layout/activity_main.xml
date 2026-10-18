@@ -75,6 +75,23 @@
             style="@style/Suichuan.HintText"
             android:text="QQ、微信收到的安装包经常打不开（名字被改了），点下面这个入口选它就能直接安装，不用去文件管理器改名。" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="推荐给朋友"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/button_lan_share"
+            style="@style/Suichuan.BigButton"
+            android:text="面对面分享随传" />
+
+        <TextView
+            style="@style/Suichuan.HintText"
+            android:text="对方还没装随传？连同一个 Wi‑Fi 或你的热点，扫码就能下载，不需要网络。" />
+
         <Button
             android:id="@+id/button_upload_log"
             style="@style/Widget.MaterialComponents.Button.TextButton"
