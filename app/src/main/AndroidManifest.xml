@@ -50,6 +50,13 @@
             android:exported="false"
             android:label="生成取件码" />
 
+        <!-- 面对面分享随传: serves this app's own APK on the LAN with a QR code. -->
+        <activity
+            android:name=".LanShareActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+            android:exported="false"
+            android:label="面对面分享随传" />
+
         <activity
             android:name=".ReceiveActivity"
             android:exported="false"

@@ -33,6 +33,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.button_rescue).setOnClickListener {
             startActivity(Intent(this, RescueActivity::class.java))
         }
+        findViewById<Button>(R.id.button_lan_share).setOnClickListener {
+            startActivity(Intent(this, LanShareActivity::class.java))
+        }
         // Log upload also lives here: some failures never reach a failure
         // page, and the user may only open the app again to report one.
         findViewById<Button>(R.id.button_upload_log).setOnClickListener {
