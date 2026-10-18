@@ -12,7 +12,6 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:accessibilityHeading="true"
             android:text="检查更新"
             android:textSize="28sp"
             android:textStyle="bold" />
@@ -30,7 +29,7 @@
             android:textSize="17sp" />
 
         <ProgressBar
-            android:id="@+id/progress_update"
+            android:id="@+id/progress"
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -38,63 +37,62 @@
             android:max="100"
             android:visibility="gone" />
 
-        <TextView
-            android:id="@+id/text_progress"
-            style="@style/Suichuan.HintText"
-            android:accessibilityLiveRegion="polite"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/button_update"
-            style="@style/Suichuan.BigButton"
-            android:text="下载并安装"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/button_cancel"
-            style="@style/Suichuan.BigButton"
-            android:text="取消下载"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/button_browser"
-            style="@style/Suichuan.BigButton"
-            android:text="用浏览器下载"
-            android:visibility="gone" />
-
-        <TextView
-            android:id="@+id/text_notes_title"
+        <LinearLayout
+            android:id="@+id/layout_release"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:accessibilityHeading="true"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:visibility="gone" />
+            android:layout_marginTop="20dp"
+            android:orientation="vertical"
+            android:visibility="gone">
 
-        <TextView
-            android:id="@+id/text_notes"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:lineSpacingExtra="4dp"
-            android:textIsSelectable="true"
-            android:textSize="15sp"
-            android:visibility="gone" />
+            <TextView
+                android:id="@+id/text_release_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/text_release_meta"
+                style="@style/Suichuan.HintText" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="更新内容"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/text_release_notes"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:lineSpacingExtra="4dp"
+                android:textIsSelectable="true"
+                android:textSize="15sp" />
+        </LinearLayout>
 
         <Button
-            android:id="@+id/button_check"
+            android:id="@+id/button_primary"
             style="@style/Suichuan.BigButton"
-            android:text="检查更新" />
+            android:visibility="gone" />
 
         <Button
-            android:id="@+id/button_close"
+            android:id="@+id/button_secondary"
+            style="@style/Suichuan.BigButton"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/button_ignore"
             style="@style/Widget.MaterialComponents.Button.TextButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center_horizontal"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="12dp"
             android:minHeight="48dp"
-            android:text="返回" />
+            android:text="跳过这个版本"
+            android:visibility="gone" />
     </LinearLayout>
 </ScrollView>
