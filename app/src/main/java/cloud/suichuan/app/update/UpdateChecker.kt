@@ -159,7 +159,7 @@ object UpdateChecker {
         is SSLException ->
             "和更新服务器的安全连接没建立起来，可能是当前网络有拦截。换个网络再试。"
         else ->
-            "检查更新没有成功：${e.message ?: "网络出了点问题"}。稍后再试。"
+            "检查更新没有成功：" + cloud.suichuan.app.util.ErrorText.of(e, "网络出了点问题。") + "稍后再试。"
     }
 
     private fun downloadNetworkMessage(e: Exception): String = when (e) {
@@ -168,7 +168,7 @@ object UpdateChecker {
         is SocketTimeoutException ->
             "下载超时了，网络可能比较慢。点重试再来一次。"
         else ->
-            "下载没有完成：${e.message ?: "网络出了点问题"}。点重试再来一次。"
+            "下载没有完成：" + cloud.suichuan.app.util.ErrorText.of(e, "网络出了点问题。") + "点重试再来一次。"
     }
 
     // ---- download ----------------------------------------------------------

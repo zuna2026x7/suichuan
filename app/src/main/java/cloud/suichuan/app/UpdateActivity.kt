@@ -72,6 +72,26 @@ class UpdateActivity : AppCompatActivity() {
         startCheck()
     }
 
+    /**
+     * A successful self-update restarts the app, so only failures arrive
+     * here; show them on the page instead of a vanishing Toast.
+     */
+    private val installListener = cloud.suichuan.app.install.InstallResultBus.Listener { result ->
+        if (!isFinishing && !isDestroyed && !result.success) {
+            statusText.text = result.message
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        cloud.suichuan.app.install.InstallResultBus.register(installListener)
+    }
+
+    override fun onStop() {
+        cloud.suichuan.app.install.InstallResultBus.unregister(installListener)
+        super.onStop()
+    }
+
     override fun onDestroy() {
         // Leaving mid-download: stop it, nothing half-written is kept.
         download?.cancel()
@@ -179,7 +199,7 @@ class UpdateActivity : AppCompatActivity() {
                         showAvailable(info)
                         statusText.text = "已取消下载。"
                     } else {
-                        statusText.text = e.message ?: "下载没有完成，点重试再来一次。"
+                        statusText.text = cloud.suichuan.app.util.ErrorText.of(e, "下载没有完成，点重试再来一次。")
                         showButtons(
                             primary = "重试" to { startDownload(info) },
                             secondary = "打开下载页" to { openPage(info.pageUrl) }
@@ -246,7 +266,7 @@ class UpdateActivity : AppCompatActivity() {
             statusText.text = "已打开系统安装界面，点「更新」或「安装」即可。没看到弹窗的话，再点一次「安装更新」。"
         } catch (e: Exception) {
             AppLog.log("UPDATE", "打开系统安装失败", e)
-            Toast.makeText(this, "安装没有打开：${e.message ?: "未知问题"}", Toast.LENGTH_LONG).show()
+            statusText.text = "安装没有打开：" + cloud.suichuan.app.util.ErrorText.of(e, "系统安装程序出了问题。")
         }
     }
 

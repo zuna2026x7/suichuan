@@ -61,6 +61,7 @@
 
         <activity
             android:name=".UpdateActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:exported="false"
             android:label="检查更新" />
 
