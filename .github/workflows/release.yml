@@ -7,10 +7,9 @@ name: Release APK
 # someone opens it on GitHub and clicks "Publish release".
 #
 # One-time setup (repo Settings → Secrets and variables → Actions):
-#   SUICHUAN_KEYSTORE_BASE64   base64 of the release keystore (.jks)
-#   SUICHUAN_KEYSTORE_PASSWORD keystore password
-#   SUICHUAN_KEY_ALIAS         key alias
-#   SUICHUAN_KEY_PASSWORD      key password
+#   SUICHUAN_KEYSTORE_PASSWORD  decrypts signing/release.jks.enc and unlocks it
+# (Alternatively SUICHUAN_KEYSTORE_BASE64 / SUICHUAN_KEY_ALIAS /
+#  SUICHUAN_KEY_PASSWORD for a keystore kept outside the repo.)
 # Keep the keystore safe: every future update must be signed with the same
 # key, or Android refuses to install it over the existing app.
 
@@ -60,12 +59,24 @@ jobs:
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.SUICHUAN_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SUICHUAN_KEYSTORE_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::SUICHUAN_KEYSTORE_BASE64 secret is missing; refusing to publish an unsigned/debug-signed update."
+          # Two ways to provide the release key:
+          #  a) SUICHUAN_KEYSTORE_BASE64 secret (base64 of the .jks), or
+          #  b) signing/release.jks.enc in the repo (AES-256, PBKDF2) decrypted
+          #     with the SUICHUAN_KEYSTORE_PASSWORD secret. Only that one
+          #     secret is needed; alias defaults to "suichuan" and the key
+          #     password to the keystore password.
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          elif [ -n "$KEYSTORE_PASSWORD" ] && [ -f signing/release.jks.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+              -in signing/release.jks.enc -out "$RUNNER_TEMP/release.jks" \
+              -pass env:KEYSTORE_PASSWORD
+          else
+            echo "::error::No release key: set SUICHUAN_KEYSTORE_PASSWORD (with signing/release.jks.enc) or SUICHUAN_KEYSTORE_BASE64. Refusing to publish an unsigned/debug-signed update."
             exit 1
           fi
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           echo "SUICHUAN_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 
       - name: Unit tests and signed release build
@@ -73,10 +84,20 @@ jobs:
           SUICHUAN_KEYSTORE_PASSWORD: ${{ secrets.SUICHUAN_KEYSTORE_PASSWORD }}
           SUICHUAN_KEY_ALIAS: ${{ secrets.SUICHUAN_KEY_ALIAS }}
           SUICHUAN_KEY_PASSWORD: ${{ secrets.SUICHUAN_KEY_PASSWORD }}
-        run: >
-          gradle testReleaseUnitTest assembleRelease --stacktrace
-          -PappVersionName=${{ steps.ver.outputs.name }}
-          -PappVersionCode=${{ steps.ver.outputs.code }}
+        run: |
+          export SUICHUAN_KEY_ALIAS="${SUICHUAN_KEY_ALIAS:-suichuan}"
+          export SUICHUAN_KEY_PASSWORD="${SUICHUAN_KEY_PASSWORD:-$SUICHUAN_KEYSTORE_PASSWORD}"
+          gradle testReleaseUnitTest assembleRelease --stacktrace \
+            -PappVersionName=${{ steps.ver.outputs.name }} \
+            -PappVersionCode=${{ steps.ver.outputs.code }}
+
+      - name: Verify release signature
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | tee certs.txt
+          # Fixed release key fingerprint; every future update must match it.
+          grep -qi "SHA-256 digest: 3eb1e051ff610d59a032dc0419eb9c7d0161ec957ad4d2a5759636e2213281d2" certs.txt \
+            || { echo "::error::APK is not signed with the Suichuan release key"; exit 1; }
 
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk "suichuan-${{ steps.ver.outputs.tag }}.apk"
