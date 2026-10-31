@@ -5,12 +5,12 @@ plugins {
 
 val transferApiBase: String = (project.findProperty("transferApiBase") as String?) ?: ""
 
-// Version: the release workflow passes -PappVersionName=1.4 -PappVersionCode=10400
-// (derived from the git tag v1.4). Local/CI debug builds use the defaults.
+// Version: the release workflow passes -PappVersionName=1.5 -PappVersionCode=10500
+// (derived from the git tag v1.5). Local/CI debug builds use the defaults.
 // Before this, every release shipped as versionName 0.1.0 / versionCode 1,
 // so no in-app update check could tell versions apart.
-val appVersionName: String = (project.findProperty("appVersionName") as String?) ?: "1.4"
-val appVersionCode: Int = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 10400
+val appVersionName: String = (project.findProperty("appVersionName") as String?) ?: "1.5"
+val appVersionCode: Int = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 10500
 
 // GitHub repo whose Releases the in-app update check reads.
 val updateRepo: String = (project.findProperty("updateRepo") as String?) ?: "zuna2026x7/suichuan"

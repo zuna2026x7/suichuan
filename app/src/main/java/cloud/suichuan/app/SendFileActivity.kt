@@ -42,16 +42,17 @@ import kotlin.concurrent.thread
  * - The payload carries kind="file" + mimeType, so the receiver saves it
  *   to Downloads instead of installing it. An .apk picked here is still
  *   just a file: it is saved, not installed.
- * - Size limits: the pickup backend caps a single file at 100MB; the
- *   Litterbox fallback caps it at 1GB (see [MAX_SEND_BYTES]).
+ * - Size limits: the pickup backend's cap is read from GET /capabilities
+ *   at send time (see [ShareActivity] for why it is not hard-coded);
+ *   the Litterbox fallback caps it at 1GB (see [MAX_SEND_BYTES]).
  */
 class SendFileActivity : AppCompatActivity() {
 
     companion object {
         /** Litterbox cap: anything bigger cannot go out by either route. */
         private const val MAX_SEND_BYTES = 1073741824L // 1 GiB
-        /** Pickup backend cap: bigger files must use the fallback route. */
-        private const val BACKEND_MAX_BYTES = 100L * 1024L * 1024L // 100 MiB
+        // No hard-coded backend cap: read from GET /capabilities at send
+        // time (BackendClient), falling back to its built-in default.
     }
 
     private lateinit var fileNameText: TextView
@@ -261,12 +262,28 @@ class SendFileActivity : AppCompatActivity() {
         } else {
             lines.add("发送大约要用这么多流量（建议在 Wi-Fi 下发送）。")
         }
-        if (pickedSize > BACKEND_MAX_BYTES) {
-            lines.add("超过 100MB，会改用临时托管发送：没有取件码，对方扫二维码或粘贴分享文字接收（上限 1GB）。")
-        }
         confirmDetail.text = lines.joinToString("\n")
         confirmLayout.visibility = View.VISIBLE
         statusText.text = "确认一下，再开始发送。"
+        // Route note from the server's live cap, as in ShareActivity.
+        val base = BuildConfig.TRANSFER_API_BASE
+        if (base.isNotBlank() && pickedSize <= MAX_SEND_BYTES) {
+            thread {
+                val cap = try {
+                    BackendClient.fetchCapabilities(base)
+                } catch (e: Exception) {
+                    null
+                }
+                if (cap != null && pickedSize > cap.maxFileBytes) {
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) {
+                            confirmDetail.text = confirmDetail.text.toString() +
+                                "\n超过取件服务当前上限（${FormatUtil.size(cap.maxFileBytes)}），会改用临时托管发送：没有取件码，对方扫二维码或粘贴分享文字接收（上限 1GB）。"
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun payloadFor(downloadUrl: String): TransferPayload {
@@ -310,9 +327,7 @@ class SendFileActivity : AppCompatActivity() {
         statusText.text = "正在上传「$pickedName」…"
 
         val base = BuildConfig.TRANSFER_API_BASE
-        // Files over the backend cap skip the backend entirely — the
-        // server would refuse them with 413 anyway.
-        val useBackend = !forceTemporary && base.isNotBlank() && pickedSize <= BACKEND_MAX_BYTES
+        val useBackend = !forceTemporary && base.isNotBlank()
 
         thread {
             if (cancelled) return@thread
@@ -325,18 +340,29 @@ class SendFileActivity : AppCompatActivity() {
                 return@thread
             }
             if (cancelled) return@thread
+            // Route by the server's live cap (see ShareActivity).
+            val backendMaxBytes = if (useBackend) {
+                try {
+                    BackendClient.maxFileBytesOrDefault(base, cancelToken)
+                } catch (e: Exception) {
+                    if (cancelled) return@thread
+                    throw e
+                }
+            } else {
+                Long.MAX_VALUE
+            }
+            if (cancelled) return@thread
             runOnUiThread {
                 progressBar.isIndeterminate = false
                 progressBar.progress = 0
                 statusText.text = "正在上传（${FormatUtil.size(pickedSize)}）…"
             }
-            if (useBackend) {
+            if (useBackend && pickedSize <= backendMaxBytes) {
                 uploadViaBackend(base, file)
             } else {
-                if (!forceTemporary && base.isNotBlank() && pickedSize > BACKEND_MAX_BYTES) {
-                    // Oversize for the backend: tell the user why the
-                    // fallback is the route, then use it.
-                    runOnUiThread { statusText.text = "文件超过 100MB，改用临时托管发送…" }
+                if (useBackend) {
+                    AppLog.log("SENDFILE", "超过取件服务上限 $pickedSize > $backendMaxBytes（服务端当前上限），改走临时托管")
+                    runOnUiThread { statusText.text = "文件超过取件服务当前上限（${FormatUtil.size(backendMaxBytes)}），改用临时托管发送…" }
                 }
                 uploadViaTemporaryHosting(file)
             }

@@ -46,12 +46,10 @@ class ShareActivity : AppCompatActivity() {
 
         /** Litterbox cap: anything bigger cannot go out by either route. */
         private const val MAX_SEND_BYTES = 1073741824L // 1 GiB
-        /**
-         * Pickup backend cap (server/index.js SUICHUAN_MAX_BYTES default).
-         * Bigger packages go straight to temporary hosting instead of
-         * uploading the whole thing only to be refused with 413.
-         */
-        private const val BACKEND_MAX_BYTES = 100L * 1024L * 1024L // 100 MiB
+        // No hard-coded backend cap here anymore: the pickup backend's cap
+        // is read from GET /capabilities at send time (see startWork).
+        // The 100 MiB value lives only in BackendClient as the fallback
+        // for servers that do not answer /capabilities.
     }
 
     private lateinit var statusText: TextView
@@ -157,9 +155,10 @@ class ShareActivity : AppCompatActivity() {
         if (app.versionName.isNotBlank()) confirmLines.add("版本：${app.versionName}")
         if (app.sizeBytes > MAX_SEND_BYTES) {
             confirmLines.add("这个应用超过了 1GB 的发送上限，可能发不出去。")
-        } else if (app.sizeBytes > BACKEND_MAX_BYTES) {
-            confirmLines.add("超过 100MB，会改用临时托管发送：没有取件码，对方扫二维码或粘贴分享文字接收。")
         }
+        // The route note (backend vs temporary hosting) depends on the
+        // server's live cap, so it is filled in below once /capabilities
+        // answers; until then the confirm screen makes no route promise.
         if (isOnCellular()) {
             confirmLines.add("现在用的是手机流量，发送大约要用这么多流量。")
         } else {
@@ -169,6 +168,29 @@ class ShareActivity : AppCompatActivity() {
         confirmLayout.visibility = View.VISIBLE
         progressBar.visibility = View.GONE
         statusText.text = "确认一下，再开始发送。"
+        // Fill in the route note from the server's live capability config:
+        // if this package is over the server's current cap it will go to
+        // temporary hosting (no pickup code), otherwise it gets a code.
+        // A failed query leaves the note out; startWork re-queries and
+        // falls back to the built-in default, so nothing here is a promise.
+        val base = BuildConfig.TRANSFER_API_BASE
+        if (base.isNotBlank() && app.sizeBytes <= MAX_SEND_BYTES) {
+            thread {
+                val cap = try {
+                    BackendClient.fetchCapabilities(base)
+                } catch (e: Exception) {
+                    null
+                }
+                if (cap != null && app.sizeBytes > cap.maxFileBytes) {
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) {
+                            confirmDetail.text = confirmDetail.text.toString() +
+                                "\n超过取件服务当前上限（${FormatUtil.size(cap.maxFileBytes)}），会改用临时托管发送：没有取件码，对方扫二维码或粘贴分享文字接收。"
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun loadApp(packageName: String): InstalledApp? {
@@ -273,18 +295,33 @@ class ShareActivity : AppCompatActivity() {
                 return@thread
             }
             if (cancelled) return@thread
+            // Ask the server what it can take right now; never route by a
+            // hard-coded cap. A failed query falls back to the built-in
+            // default inside maxFileBytesOrDefault, and the server still
+            // enforces its own cap with 413 if the two ever disagree.
+            val backendMaxBytes = if (useBackend) {
+                try {
+                    BackendClient.maxFileBytesOrDefault(base, cancelToken)
+                } catch (e: Exception) {
+                    if (cancelled) return@thread
+                    throw e
+                }
+            } else {
+                Long.MAX_VALUE
+            }
+            if (cancelled) return@thread
             runOnUiThread {
                 progressBar.isIndeterminate = false
                 progressBar.progress = 0
                 statusText.text = "正在上传（${FormatUtil.size(packedFile.sizeBytes)}）…"
             }
-            if (useBackend && packedFile.sizeBytes <= BACKEND_MAX_BYTES) {
+            if (useBackend && packedFile.sizeBytes <= backendMaxBytes) {
                 uploadViaBackend(base, packedFile)
             } else {
                 if (useBackend) {
-                    AppLog.log("SEND", "超过取件服务上限 ${packedFile.sizeBytes} > $BACKEND_MAX_BYTES，改走临时托管")
+                    AppLog.log("SEND", "超过取件服务上限 ${packedFile.sizeBytes} > $backendMaxBytes（服务端当前上限），改走临时托管")
                     runOnUiThread {
-                        statusText.text = "应用超过 100MB，改用临时托管发送（${FormatUtil.size(packedFile.sizeBytes)}）…"
+                        statusText.text = "应用超过取件服务当前上限（${FormatUtil.size(backendMaxBytes)}），改用临时托管发送（${FormatUtil.size(packedFile.sizeBytes)}）…"
                     }
                 }
                 uploadViaTemporaryHosting(packedFile)

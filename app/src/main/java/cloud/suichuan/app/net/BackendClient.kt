@@ -33,6 +33,63 @@ object BackendClient {
 
     data class CreatedTransfer(val code: String, val uploadToken: String)
 
+    /**
+     * What the server says it can currently do (GET /capabilities).
+     * This is the single source of truth for the send-size decision:
+     * the old hard-coded 100 MiB app cap broke the moment the server's
+     * SUICHUAN_MAX_BYTES was raised to 2 GiB, because the app routed
+     * 100 MB+ packages to temporary hosting without ever trying the
+     * backend. Never throw from [fetchCapabilities] — callers fall back
+     * to [DEFAULT_MAX_FILE_BYTES] when the server is old or unreachable.
+     */
+    data class Capabilities(
+        val maxFileBytes: Long,
+        val maxTtlSeconds: Long,
+        val textMaxBytes: Long
+    )
+
+    /** Fallback cap used only when /capabilities cannot be read. */
+    const val DEFAULT_MAX_FILE_BYTES: Long = 100L * 1024L * 1024L // 100 MiB
+
+    /**
+     * Queries the server's capability config. Returns null (never throws)
+     * on any failure — network error, non-200, unparseable body, or a
+     * missing/invalid cap — so the caller can fall back safely.
+     * Blocking: call from a background thread, like every function here.
+     */
+    fun fetchCapabilities(base: String, cancel: CancelToken? = null): Capabilities? {
+        val trimmedBase = base.trimEnd('/')
+        val request = Request.Builder().url("$trimmedBase/capabilities").get().build()
+        return try {
+            HttpClients.call(request, cancel).execute().use { response ->
+                if (!response.isSuccessful) {
+                    AppLog.log(
+                        "API",
+                        "GET /capabilities -> ${response.code}，用默认上限 $DEFAULT_MAX_FILE_BYTES"
+                    )
+                    return null
+                }
+                val map = PayloadCodec.parseMap(response.body?.string().orEmpty())
+                    ?: return null
+                val maxFile = map["maxFileBytes"]?.toLongOrNull()
+                    ?: map["maxBytes"]?.toLongOrNull()
+                    ?: return null
+                if (maxFile <= 0) return null
+                val caps = Capabilities(
+                    maxFileBytes = maxFile,
+                    maxTtlSeconds = map["maxTtlSeconds"]?.toLongOrNull() ?: (72L * 60L * 60L),
+                    textMaxBytes = map["textMaxBytes"]?.toLongOrNull() ?: (64L * 1024L)
+                )
+                AppLog.log("API", "GET /capabilities -> ${response.code}，maxFileBytes=$maxFile")
+                caps
+            }
+        } catch (e: Exception) {
+            if (e is TransferCancelledException) throw e
+            AppLog.log("API", "GET /capabilities 失败，用默认上限 $DEFAULT_MAX_FILE_BYTES", e)
+            null
+        }
+    }
+
     data class FetchedTransfer(
         val payload: TransferPayload,
         val ready: Boolean,
@@ -45,6 +102,14 @@ object BackendClient {
         // Ordinary files only; null/blank for apps and text transfers.
         val mimeType: String? = null
     )
+
+    /**
+     * The backend cap to route by: the server's live value when it can be
+     * read, [DEFAULT_MAX_FILE_BYTES] otherwise. Throws only on cancel.
+     */
+    fun maxFileBytesOrDefault(base: String, cancel: CancelToken? = null): Long {
+        return fetchCapabilities(base, cancel)?.maxFileBytes ?: DEFAULT_MAX_FILE_BYTES
+    }
 
     /** Registers a transfer's metadata and returns its code + upload token. */
     fun createTransfer(

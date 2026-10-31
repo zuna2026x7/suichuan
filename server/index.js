@@ -24,6 +24,11 @@
 //                           when the user taps the in-app button); stored
 //                           verbatim under logs/, no auth — the log
 //                           contains no tokens by construction
+//   7. GET    /capabilities the server's current capability config:
+//                           per-file cap, TTL bounds, text/log caps and
+//                           supported kinds. The app queries this before
+//                           sending and routes by the server's cap, so
+//                           raising SUICHUAN_MAX_BYTES needs no app change.
 //
 // POST /t also accepts { kind: "text", text }: a text message instead of
 // an app. The record stores the text itself and is ready the moment it is
@@ -798,6 +803,33 @@ async function handleUpload(req, res, uploadToken) {
   }
 }
 
+// GET /capabilities — the server tells the app its current capability
+// config, so the app never has to hard-code the server's limits again.
+// Flat string/number fields only (no arrays/objects): the app's hand-rolled
+// JSON parser reads a flat object. Unknown future fields are ignored by
+// old clients; old servers simply 404 this path and the app falls back
+// to its built-in defaults.
+function handleCapabilities(req, res) {
+  return sendJson(res, 200, {
+    ok: true,
+    service: "suichuan-pickup",
+    // Per-file cap for app/file transfers — the one number that decides
+    // whether a package goes to the backend or to temporary hosting.
+    maxFileBytes: MAX_BYTES,
+    // Alias for clients that read the generic name.
+    maxBytes: MAX_BYTES,
+    // TTL bounds: the app asks for maxTtlSeconds (72h) on every transfer.
+    maxTtlSeconds: MAX_TTL_SECONDS,
+    defaultTtlSeconds: DEFAULT_TTL_SECONDS,
+    minTtlSeconds: MIN_TTL_SECONDS,
+    textMaxBytes: TEXT_MAX_BYTES,
+    logMaxBytes: LOG_MAX_BYTES,
+    // Comma-separated, not an array, for the flat-object parser.
+    kinds: "app,file,text",
+    rangeDownload: true,
+  });
+}
+
 function handleGetMeta(req, res, code) {
   if (!/^\d{6}$/.test(code)) {
     return sendJson(res, 400, { error: "取件码应该是 6 位数字。" });
@@ -978,6 +1010,11 @@ async function handle(req, res) {
   // POST /log — client diagnostic log upload (user-initiated only).
   if (req.method === "POST" && parts.length === 1 && parts[0] === "log") {
     return handleLogUpload(req, res);
+  }
+
+  // GET /capabilities — current capability config (see handleCapabilities).
+  if (req.method === "GET" && parts.length === 1 && parts[0] === "capabilities") {
+    return handleCapabilities(req, res);
   }
 
   if (url.pathname === "/" || url.pathname === "/health") {

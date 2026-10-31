@@ -22,6 +22,7 @@ behaviour was kept compatible.
 | `GET /f/:code`     | Download the file (supports `Range`).                       |
 | `DELETE /t/:code`  | Delete early; needs `deleteToken` as `?token=` or `x-delete-token`. |
 | `POST /log`        | Upload an app log (≤ 1 MiB).                                |
+| `GET /capabilities` | Current capability config: `maxFileBytes`, TTL bounds, text/log caps, supported kinds. The app queries this before sending, so changing the cap here needs no app release. |
 | `GET /`, `/health` | Health check: `{"ok":true,"service":"suichuan-pickup",...}` |
 
 Errors are JSON `{ "error": "中文说明" }`; the app shows that text as is.
@@ -61,9 +62,11 @@ open for the phones to reach it (default **8080**; the current production
 deployment is reached on **8081**, so keep the unit's `PORT` and the app's
 `transferApiBase` in step).
 
-Files bigger than `SUICHUAN_MAX_BYTES` are rejected; the app knows the
-100 MiB limit and sends anything larger through Litterbox instead, so if you
-raise the limit here, raise `BACKEND_MAX_BYTES` in the app too.
+Files bigger than `SUICHUAN_MAX_BYTES` are rejected. Since v1.5 the app
+no longer hard-codes that limit: it queries `GET /capabilities` before
+sending and routes by the server's `maxFileBytes`, falling back to 100 MiB
+only if the query fails (e.g. an older server). Raising the limit here now
+takes effect for updated apps with no app release.
 
 ## Configuration (environment variables)
 
@@ -72,7 +75,7 @@ raise the limit here, raise `BACKEND_MAX_BYTES` in the app too.
 | `PORT`              | `8080`              | Listen port                              |
 | `HOST`              | `0.0.0.0`           | Listen address                           |
 | `SUICHUAN_DATA_DIR` | `<server dir>/data` | Where records + files are stored         |
-| `SUICHUAN_MAX_BYTES`| `104857600` (100MiB)| Absolute per-file cap (the app's `BACKEND_MAX_BYTES` matches it) |
+| `SUICHUAN_MAX_BYTES`| `104857600` (100MiB)| Absolute per-file cap, reported to apps via `GET /capabilities` as `maxFileBytes` |
 | `SUICHUAN_SWEEP_MS` | `600000` (10 min)   | How often expired transfers are swept    |
 
 ## Storage layout
